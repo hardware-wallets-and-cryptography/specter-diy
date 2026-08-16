@@ -175,7 +175,10 @@ class WalletManager(BaseApp):
             except:
                 pass
         # probably wallet descriptor
-        if b"&" in data and b"?" not in data:
+        # Check for an & Symbol, typically used when descriptor supplied with a name
+        # Also check the most common descriptor types for multisig wallets
+        common_descriptor_markers = [b"&", b"tr(", b"wsh(", b"sh("]
+        if any(marker in data for marker in common_descriptor_markers) and b"?" not in data:
             # rewind
             stream.seek(0)
             return ADD_WALLET, stream
@@ -326,7 +329,7 @@ class WalletManager(BaseApp):
         Returns dict with options to pass to sign_psbtview function.
         """
 
-        # ask the user if he wants to sign with custom sighashes
+        # ask the user if they want to sign with custom sighashes
         sighash = await self.confirm_sighashes(meta, show_screen)
         if sighash == False:
             return
@@ -403,7 +406,7 @@ class WalletManager(BaseApp):
         if not used_custom_sighashes:
             return None
 
-        # ask the user if he wants to sign in case of non-default sighashes
+        # ask the user if they want to sign in case of non-default sighashes
         custom_sighashes = [
                 ("Input %d: %s" % (i, inp.get("sighash", sighash_name)))
                 for (i, inp) in enumerate(meta["inputs"])
@@ -638,6 +641,8 @@ class WalletManager(BaseApp):
             "outputs": [{} for i in range(psbtv.num_outputs)],
             "default_asset": "BTC" if self.network == "main" else "tBTC",
             "signed_inputs": signed_inputs,
+            "tx_version": psbtv.tx_version,
+            "locktime": psbtv.locktime,
         }
 
         fingerprint = self.keystore.fingerprint
@@ -696,6 +701,7 @@ class WalletManager(BaseApp):
             metainp.update({
                 "label": wallet.name if wallet else "Unknown wallet",
                 "value": value,
+                "sequence": inp.sequence,
             })
             if wallet and wallet.is_watchonly:
                 metainp["label"] += " (watch-only)"
