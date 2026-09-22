@@ -3,7 +3,6 @@ from .prompt import Prompt
 from ..common import add_label, format_addr
 from ..decorators import on_release
 
-
 class TransactionScreen(Prompt):
     def __init__(self, title, meta):
         self.default_asset = meta.get("default_asset", "BTC")

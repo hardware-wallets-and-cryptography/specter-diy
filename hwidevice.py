@@ -36,7 +36,7 @@ class SpecterClient(HardwareWalletClient):
         """
         :param path: Path to the device as returned by :func:`~hwilib.commands.enumerate`
         :param password: A password/passphrase to use with the device.
-            Typically a BIP 39 passphrase, but not always.
+            Typically a BIP-39 passphrase, but not always.
             See device specific documentation for further details.
         :param expert: Whether to return additional information intended for experts.
         """

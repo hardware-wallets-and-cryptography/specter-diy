@@ -27,7 +27,7 @@ def poweroff(_):
 
 pyb.ExtInt(pyb.Pin('B1'), pyb.ExtInt.IRQ_FALLING, pyb.Pin.PULL_NONE, pwrcb)
 
-# configure usb from start if you want, 
+# configure USB from start if you want,
 # otherwise will be configured after PIN
 # pyb.usb_mode("VCP+MSC") # debug mode with USB and mounted storages from start
 # pyb.usb_mode("VCP") # debug mode with USB from start
@@ -39,6 +39,7 @@ pyb.ExtInt(pyb.Pin('B1'), pyb.ExtInt.IRQ_FALLING, pyb.Pin.PULL_NONE, pwrcb)
 # inject version to platform module
 import platform
 platform.version = version
+platform.build_type = "debug"  # not yet used by me
 
 # uncomment to run some custom main:
 pyb.main("hardwaretest.py")

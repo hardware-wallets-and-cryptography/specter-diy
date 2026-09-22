@@ -17,9 +17,9 @@ QR codes are a default way for Specter to communicate with the host. QR codes ar
 
 For secret storage we support agnostic mode (wallet forgets all secrets when turned off), reckless mode (stores secrets in flash of the application microcontroller) and secure element integration is coming soon.
 
-Our main focus is multisignature setup with other hardware wallets, but wallet can also work as a single signer. We try to make it compatible with Bitcoin Core where we can - PSBT for unsigned transactions, wallet descriptors for importing/exporting multisig wallets. To communicate with Bitcoin Core easier we are also working on [Specter Desktop app](https://github.com/cryptoadvance/specter-desktop) - a small python flask server talking to your Bitcoin Core node.
+Our main focus is multisignature setup with other hardware wallets, but wallet can also work as a single signer. We try to make it compatible with Bitcoin Core where we can - PSBT for unsigned transactions, wallet descriptors for importing/exporting multisig wallets. To communicate with Bitcoin Core easier we are also working on [Specter Desktop app](https://github.com/cryptoadvance/specter-desktop) - a small Python [Flask](https://github.com/pallets/flask) server talking to your Bitcoin Core node.
 
-Most of the firmware is written in MicroPython which makes the code easy to audit and change. We use [secp256k1](https://github.com/bitcoin-core/secp256k1) library from Bitcoin Core for elliptic curve calculations and [LittlevGL](https://lvgl.io/) library for GUI.
+Most of the firmware is written in MicroPython which makes the code easy to audit and change. We use [secp256k1](https://github.com/bitcoin-core/secp256k1) library from Bitcoin Core for elliptic curve calculations and [LVGL](https://lvgl.io/) library for GUI.
 
 ## DISCLAIMER
 
@@ -31,23 +31,17 @@ If something doesn't work open an issue here or ask a question in our [Telegram 
 
 All the docs are stored in the [`docs/`](./docs) folder:
 
-- [`shopping.md`](./docs/shopping.md) explains what to buy
-- [`assembly.md`](./docs/assembly.md) shows how to put everything together.
+- [`shopping-list.md`](./docs/shopping-list.md) explains what to buy
+- [`assembly.md`](./docs/assembly.md) shows how to put everything together
 - [`quickstart.md`](./docs/quickstart.md) guides you through the initial steps how to get firmware on the board
-- [`reproducible-build.md`](./docs/reproducible-build.md) describes how to build the initial firmware and upgrade files with the same hash as in the release using Docker
-- [`build.md`](./docs/build.md) describes how to build the firmware and the simulator yourself
-- [`security.md`](./docs/security.md) explains possible attack vectors and security model of the project
+- [`security-info.md`](./docs/security-info.md) explains possible attack vectors and security model of the project
+- [`deterministic-firmware-build.md`](./docs/deterministic-firmware-build.md) shows how to reproduce the released binaries in Docker and verify their hashes
+- [`development-firmware-build-simulation-testing.md`](./docs/development-firmware-build-simulation-testing.md) describes how to build the firmware and the simulator yourself
+- [`This doc block`](./docs/development-firmware-build-simulation-testing.md#build-and-run-the-simulator) shows how to build and run the simulator on Unix/macOS
+- [`This doc block`](./docs/development-firmware-build-simulation-testing.md#run-unit-tests) describes how to run the unit tests
 - [`development.md`](./docs/development.md) explains how to start developing on Specter
-- [`simulator.md`](./docs/simulator.md) shows how to run a simulator on unix/macOS
 - [`communication.md`](./docs/communication.md) defines communication protocol with the host over QR codes and USB
 - [`roadmap.md`](./docs/roadmap.md) explains what we need to implement before we can consider the wallet be ready to use with real funds.
-
-Specter-Shield documentation and all the files are available in the [`shield/`](./shield) folder:
-
-- [What it looks like](./shield/README.md)
-- [How to print a 3d case](./shield/3dprinting.md)
-
-Supported networks: Mainnet, Testnet, Regtest, Signet.
 
 ## USB communication on Linux
 
@@ -57,7 +51,7 @@ You may need to set up udev rules and add yourself to `dialout` group. Read more
 
 Check out [this video](https://www.youtube.com/watch?v=1H7FqG_FmCw) to get an idea how to assemble it and how it works.
 
-Here is a [Gallery](./docs/pictures/gallery/README.md) with devices assembled by the community.
+Here is a [gallery](./docs/pictures/gallery/README.md) with devices assembled by the community.
 
 A few pictures of the UI:
 
