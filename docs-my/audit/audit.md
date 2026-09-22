@@ -1,6 +1,6 @@
 # Specter-DIY security audit report
 
-**Repository:** `cryptoadvance/specter-diy`
+**Repository:** `hardware-wallets-and-cryptography/specter-diy`
 
 **Audited tree:** branch `master-from-tag-1.9.0--my-changes--integration`,
 HEAD `66093bb5be5b0e75416259c1d176c7f50156c785`
