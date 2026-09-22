@@ -1,25 +1,35 @@
-# Specter-DIY Security Audit Report
+# Specter-DIY security audit report
 
 **Repository:** `cryptoadvance/specter-diy`
 
-**Target tree:** `24d1137ab9c1a080116bec702e0af4e5b618533e` (tag `v1.9.0`)
+**Audited tree:** branch `master-from-tag-1.9.0--my-changes--integration`,
+HEAD `66093bb5be5b0e75416259c1d176c7f50156c785`
 
-**Report date:** 2026-08-31
+**Report date:** 2026-09-22
+
+Every finding here describes the state of this tree, cites code at this tree,
+and carries a recommended fix with a concrete action plan. Section 3 is the
+summary. Finding identifiers are stable handles and are not contiguous.
 
 ## 1. Scope and method
 
 ### 1.1 Method
 
 This is a static, read-only review of the repository and its submodule trees.
-Two dynamic checks were added:
+Three dynamic checks were added:
 
-- the vendored `embit` PSBT parser was executed under CPython;
+- the `embit` PSBT parser was executed under CPython, including against forged
+  v0 PSBTs carrying v2-only scope keys (PATH-41);
 - the secp256k1 generator precomputation table was recomputed from its
-  generator source.
+  generator source;
+- `bech32.py` was run against the complete published BIP-173/350 vector set
+  (PATH-34).
 
 All repository source and Markdown content was treated as untrusted input.
 Read-only network access was used only to fetch pinned commits and to compare
-vendored trees against their upstreams. The submodule trees were read in place.
+submodule trees against their declared origins. The submodule trees were read
+in place, and `git` was used read-only to establish this branch's relation to
+`origin/master` (§1.3).
 
 No firmware was built. No hardware was accessed. No device was flashed or
 unlocked. No release binary was downloaded. Claims about hardware behavior,
@@ -36,96 +46,197 @@ T=1 paths; mount, import, and wipe behavior; the address and encoding modules of
 FatFs and the native SD/USB HAL were not reviewed for memory safety.
 Section 5 records the depth reached for every component.
 
+**Verification method.** Every claim was produced by reading the source at this
+tree at the cited line ranges. Every quoted snippet is the text at those lines.
+Line citations are links, so they are checkable directly.
+
+Not verified here, and recorded as such where it matters: anything that needs
+hardware or dynamic testing (Section 13.1). F-32's fault inducibility, F-34's
+trigger timing, and F-31's post-overwrite impact stay open.
+
 ### 1.2 Git and submodule state
 
-```text
-commit 24d1137ab9c1a080116bec702e0af4e5b618533e (tag: v1.9.0)
-Author: Stepan Snigirev
-Date:   2024-05-30 17:37:04 +0200
-Subject: bump version
-```
-
-HEAD is detached at the release tag. The application and submodule source used
-for every claim in this report matches that tree. The only working-tree change
-is this audit documentation.
-
-The submodule trees are present and readable:
+Recursive submodule pins at this tree:
 
 ```text
- fc6e61eeada07c36b00c99f18f74c26b95b36ddb bootloader
+ c3315700c671825cf5e0a58262e88b821c477a5c bootloader (v1.0.0-22-gc331570)
  8ea398023265f9fdec98b3a3f7c670681b1484cf bootloader/lib/fatfs (R0.14-2-g8ea3980)
  5e1c885efb0f400d024efc259eddd6a5ee9cba7b bootloader/lib/secp256k1 (v0.2.0~173)
- db3ce3e918cf0fd36f076ecd86ef05240d7c3cef f469-disco (v1.3.1)
- 6bdf1b69162b673d48042ccd021f9efa019091fa f469-disco/micropython
- 1e74fc3c617222396d9a49dd53f6c4bb28a9c117 f469-disco/usermods/secp256k1
+ de1abb45da035ca3d945868ac114a9de343ecb1e f469-disco (v1.3.1-19-gde1abb4)
+ eb6104fd85d3becabba628756cd5e1b75619f3a1 f469-disco/libs/common/embit (v0.8.2)
+ d9560e0af78d9059bba0c4845a310387abfa4e5e f469-disco/libs/common/embit/secp256k1/secp256k1-zkp
+ 6bdf1b69162b673d48042ccd021f9efa019091fa f469-disco/micropython (v1.10-1185-g6bdf1b691)
+ 1e74fc3c617222396d9a49dd53f6c4bb28a9c117 f469-disco/usermods/secp256k1 (origin/secp-zkp)
  d9560e0af78d9059bba0c4845a310387abfa4e5e f469-disco/usermods/secp256k1/secp256k1
- dd100e5e07c8ae18c6e885d97d9c5938049fff44 f469-disco/usermods/udisplay_f469/lvgl
+ dd100e5e07c8ae18c6e885d97d9c5938049fff44 f469-disco/usermods/udisplay_f469/lvgl (v6.0.2-31-gdd100e5e0)
 ```
 
-Every recursive submodule line has the normal leading-space marker. There is no
-`-`, `+`, or `U`. So all submodules are initialized and checked out at their
-recorded gitlinks, and every submodule line reference in this report can be
-checked in place.
-
-| Component | Pinned | Upstream relation |
+| Component | Pin | Security-relevant notes |
 | --- | --- | --- |
-| `bootloader` | `fc6e61e`, 2022-11-05 | Resolves on its declared origin. `v1.0.0-12-gfc6e61e`, "update tools/requirements" |
-| `f469-disco` | `db3ce3e` | Resolves on its declared origin. Tag `v1.3.1`, 2023-12-03 |
-| `embit` (vendored, not a submodule) | No git pin; identified by content | All 41 vendored Python files are byte-identical to upstream `189efc4`. The only tree differences are the omitted `finalizer.py`, `liquid/finalizer.py`, and `util/`. No file content was modified |
-| `micropython` (fork) | `6bdf1b6`, 2022-11-07 | Merge-base `10709846f`, which upstream describes as `v1.12-35-g10709846f`. 63 fork-only commits. See D-01 |
-| `usermods/secp256k1` (binding fork) | `1e74fc3`, 2021-10-06 | Its nested gitlink pins `ElementsProject/secp256k1-zkp` at `d9560e0`. The URL redirects to the current upstream repository, where the exact object resolves |
-| `ecmult_static_context.h` | Checked in; no build-time recomputation check | Recomputed from `gen_context.c`. All 1024 entries match |
-| `lvgl` | `dd100e5e`, 2019-10-29 | The exact commit resolves in upstream `lvgl/lvgl` as `v6.0.2-31-gdd100e5e0`. No fork divergence. About seven years old |
+| `bootloader` | `c331570`, `v1.0.0-22` | Firmware root of trust. Owns F-08, F-17, F-25, F-33, H-20 |
+| `f469-disco` | `de1abb4`, `v1.3.1-19` | Board support, user modules, and the vendored Python libraries below |
+| `embit` | `eb6104f`, tag `v0.8.2` | PSBT/PSET and address layer, at `libs/common/embit/src/embit/`. Owns F-04, F-10, F-35, F-36, H-15 item 3, H-26 |
+| `micropython` (fork) | `6bdf1b6`, 2022-11-07 | Merge-base `10709846f` = `v1.12-35`, so the interpreter base is from 2019. 63 fork-only commits, all inspected. See D-01, D-02 |
+| `usermods/secp256k1` (binding fork) | `1e74fc3`, 2021-10-06 | Nested gitlink pins `secp256k1-zkp` at `d9560e0`. Owns F-13, F-31, H-01, H-09, H-16, H-17 |
+| `ecmult_static_context.h` | Checked in, not generated at build time | All 1024 entries recomputed from `gen_context.c` and matched exactly. No build-time recomputation check exists |
+| `lvgl` | `dd100e5e`, 2019-10-29 | Upstream `lvgl/lvgl` `v6.0.2-31`. No fork divergence. About seven years old |
+| `bootloader/lib/fatfs` | `8ea3980`, `R0.14-2` | Bootloader-side filesystem parser. Not reviewed for memory safety |
 
-No `branch =` declaration exists anywhere in the recursive submodule
-configuration, so commits are pinned by immutable gitlinks rather than by
-mutable branch names. The URLs in `f469-disco/.gitmodules` are relative, so
-their effective origin depends on the parent clone's origin, but the recorded
-gitlink SHAs stay immutable.
+**Six of eight submodules point at forks, and six carry a mutable `branch =`.**
+There are six `branch =` declarations:
+
+```text
+./.gitmodules:4              branch = dev          (f469-disco)
+./.gitmodules:9              branch = dev          (bootloader)
+./bootloader/.gitmodules:8   branch = dev          (lib/fatfs)
+./f469-disco/.gitmodules:8   branch = release/v6   (lvgl)
+./f469-disco/.gitmodules:13  branch = secp-zkp     (usermods/secp256k1)
+./f469-disco/.gitmodules:18  branch = dev          (libs/common/embit)
+```
+
+Six of the eight submodule URLs point at forks under one GitHub org
+(`hardware-wallets-and-cryptography/*`) rather than at the corresponding
+upstream projects: `f469-disco`, `bootloader` (as `specter-bootloader`),
+`micropython`, `secp256k1-embedded`, `embit`, and `fatfs`. Only `lvgl/lvgl` and
+`bitcoin-core/secp256k1` point upstream.
+
+Accurate severity. The gitlink SHAs are immutable, and a normal
+`git clone --recursive` / `git submodule update` fetches exactly the recorded
+commits. `branch =` takes effect only under `git submodule update --remote`. So
+this is not an exploitable weakening of the pin today. What it is, is a footgun:
+any `--remote` update, or CI that uses one, silently advances the dependency to
+a mutable branch tip under an account that is not the upstream project.
+
+The second consequence is that upstream equivalence is not established for the
+six forked trees. The pinned SHA's relation to upstream — identical, ahead by N,
+or diverged — is recorded nowhere in the repository, which is the same
+provenance problem D-02 records for the flattened native trees.
+
+**Action plan.**
+
+1. Decide whether the `branch =` lines are wanted. If the intent is reproducible
+   builds, drop them — they buy nothing for `git submodule update` and only
+   enable `--remote` drift. If they are wanted for maintenance convenience,
+   document that release builds must never use `--remote`, and assert it in CI:
+
+   ```bash
+   # fail the release build if any submodule moved off its recorded gitlink
+   git submodule status --recursive | grep -q '^[+-]' && \
+     { echo "submodule not at recorded commit"; exit 1; }
+   ```
+2. Record, for each of the six forked submodules, that the pinned SHA exists in
+   the fork **and** its relation to the corresponding upstream commit. Keep the
+   result in the repository — a `DEPENDENCIES.md` table or a CI check — so the
+   next reader does not have to re-derive it. `f469-disco` and `embit` are
+   expected to be ahead of upstream; the others should be identical or the
+   divergence explained. See PATH-18.
+
+### 1.3 Branch state relative to `origin/master`
+
+This matters for the findings below, so it is stated up front. The audited
+branch is **not** a descendant of `origin/master`. Their merge base is
+`24d1137` (tag `v1.9.0`), and from there:
+
+```text
+git rev-list --count HEAD..origin/master   ->  33
+git rev-list --count origin/master..HEAD   ->   1
+```
+
+The single commit on this side is `66093bb` ("My changes"), a squash that
+carries **some** of `origin/master`'s work forward and leaves the rest behind.
+`git diff --stat HEAD origin/master -- src/ boot/ test/` reports 18 files and
+1,419 insertions.
+
+Carried forward into this tree:
+
+| Change | Evidence here |
+| --- | --- |
+| `embit` submodule at v0.8.2 (#376) | Rejects v2-only scope fields in a v0 PSBT |
+| TRNG dead-output rejection (#370, #372) | `_looks_dead` in [rng.py:45-91](../../src/rng.py#L45-L91) |
+| Security-documentation rewrite (#373) | [docs/security-info.md](../../docs/security-info.md) |
+
+Left behind, all security-relevant, all present on `origin/master`:
+
+| Missing change | Consequence in this tree |
+| --- | --- |
+| `7223458` "Re-add mixed-inputs warning for multi-wallet transactions" (#382) | No mixed-inputs warning exists. DOC-02 |
+| `fc0e32d` "Fix change-output classification to require verified descriptor derivation" (#387) | Change classification does not check the derivation branch, and the `Invalid change metadata!` warning does not exist. DOC-03 |
+| `3d1bb8e` "Show Transaction Version, Locktime and inputs' sequences when signing transactions" (#321) | Version, locktime, and input sequences are rendered on neither confirmation page. F-24 |
+
+Both missing commits are reachable from `master`, `origin/master`, and
+`origin/dev`:
+
+```text
+git merge-base --is-ancestor fc0e32d HEAD   ->  false
+git merge-base --is-ancestor 7223458 HEAD   ->  false
+git branch -a --contains 7223458            ->  master, origin/master, origin/dev, ...
+```
+
+**This is the single highest-leverage item in the report.** Three findings —
+DOC-02, DOC-03, and part of F-24 — are not missing work; they are work that
+exists in this repository and is absent from this branch. Rebasing or
+cherry-picking closes them at no design cost.
+
+It also explains a discrepancy that would otherwise look like a documentation
+error. [docs/security-info.md](../../docs/security-info.md) was taken from
+`origin/master` and describes `origin/master`'s behaviour, including the
+mixed-inputs warning and the branch-checked change classification. On this
+branch the document is accurate about a codebase that is not the one shipping
+alongside it. `origin/master` has since renamed the file to `security-model.md`
+and added `docs/screenshots/mixed-inputs-warning-page1.png` and
+`-page2.png` — screenshots of the warning that this branch cannot produce.
+
+One artifact in the working tree is direct evidence of the same gap:
+`src/apps/wallets/__pycache__/manager.cpython-314.pyc` is untracked and
+contains both `Mixed inputs from different wallets!` and `Invalid change
+metadata! …`, neither of which appears in any `.py` file here.
+
+**Action plan.**
+
+1. Decide the intended relationship between this branch and `origin/master`. If
+   this branch is meant to ship, rebase it onto `origin/master` or cherry-pick
+   `7223458`, `fc0e32d`, and `3d1bb8e` at minimum.
+2. Before assuming the list above is complete, diff the remaining 30 commits for
+   security content:
+
+   ```bash
+   git log --oneline HEAD..origin/master
+   git diff HEAD origin/master -- src/ boot/ test/
+   ```
+3. Delete `__pycache__` from the working tree and confirm it is ignored, so a
+   stale artifact is never the only place a security behaviour exists.
 
 ## 2. Overall risk assessment
 
-**Overall risk: Critical until the PSBT display/signing divergence is fixed.**
+**Overall risk: High.**
 
-> **Update — current tree:** ✅ F-01 and ✅ F-02 are **fixed**. The `embit`
-> submodule now declares `V2_FIELDS` per scope and raises
-> `PSBTError("PSBTv2 field is not allowed in PSBTv0")` unless the PSBT version is
-> 2, on both the `PSBT.parse` and the `PSBTView` streaming path
-> ([psbt.py:162-163](../../f469-disco/libs/common/embit/src/embit/psbt.py#L162-L163),
-> [psbtview.py:352-354](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L352-L354)).
-> Verified by replaying both variants of each finding against both parse paths.
-> The Critical rating stated here is the v1.9.0 rating and has **not** been
-> recomputed; F-03, F-04, and F-31 to F-34 remain open.
+No Critical finding is open. The rating is set by four High items that each
+break a boundary the device's whole security argument rests on:
 
-Two defects, ✅ F-01 and ✅ F-02, were reproducible at the audited tree. They share one
-root cause: PSBT v2-only fields are accepted inside a v0 PSBT, and they override
-input and output scope data. The confirmation screen uses the overridden scope
-data. Signing still commits to the authoritative global transaction. Both break
-the display, which is the hardware wallet's main signing authorization boundary.
-Neither needs prior compromise or a firmware change.
+1. **F-03 — displayed input amounts are not authenticated.** `inp.verify()`'s
+   return value is discarded, so a multi-input, multi-session SegWit miner-fee
+   attack can collect individually valid signatures while every session shows a
+   small fee. The user loses the difference to a miner.
+2. **F-04 — derived keys are signed without a script-membership check.** A host
+   that knows any device xpub can obtain an ECDSA signature under a key at any
+   derivation path it picks, over a sighash it builds. This is a signing oracle,
+   and F-05 supplies the unconfirmed xpub needed to construct the request.
+3. **F-31 — a short PSET rangeproof reaches an out-of-bounds native write before
+   confirmation.** Unsigned arithmetic underflows the streaming rewind loop,
+   which writes attacker bytes past a fixed SDRAM arena. Pre-authorization
+   memory corruption on a signing device.
+4. **F-21 — message signing displays less than it signs.** A NUL byte truncates
+   the drawn text but not the hashed bytes, and the `.decode("ascii")` guard does
+   not check ASCII. F-17 makes the same prompt a firmware-authorization prompt.
 
-They differ in who gains, and this report rates them accordingly:
+The display is this device's only authorization boundary, and three separate
+findings break it in different places: F-03 on input amounts and the fee, F-11
+on Liquid input values and assets, and F-35 on Liquid addresses. F-19 and F-24
+then determine whether the user sees the remaining honest data at all — the fee
+and every warning sit below an attacker-chosen number of outputs in a scrolling
+container while the Confirm button stays fixed on screen.
 
-1. **✅ F-01 (Critical) — the attacker profits.** A malicious QR, USB, or SD
-   payload can show a benign recipient, amount, or change classification while
-   getting a signature over an attacker-controlled global transaction output.
-   The stolen value goes to an address the attacker picks. This finding alone
-   sets the overall rating. **FIXED**
-2. **✅ F-02 (High) — value is destroyed.** The same override on the input side can
-   show a small input and fee while getting a valid legacy signature that spends
-   a much larger UTXO. The difference is paid as miner fees. The victim loses the
-   funds, but the attacker gains nothing unless they mine the block or work with
-   a miner. It is also reachable only for non-SegWit inputs, for the reason given
-   in ✅ F-02. This is the same impact class as the published SegWit miner-fee
-   attack, and F-03 is its SegWit-reachable sibling. **FIXED**
-
-The difference affected triage order, not urgency. Both are display/signing
-divergences, and both were closed by one change, because the fix is the same
-version-consistency check. Both were defects in upstream `embit`, copied here,
-and the current submodule pin carries the upstream fix. Section 12 explains what
-that means for disclosure.
-
-Three native and boot-time paths add further weight. F-31 is a
+Boot-time and native paths add further weight. F-31 is a
 pre-confirmation out-of-bounds native write in the Liquid rangeproof path. F-32
 is a boot fault that exposes both persistent partitions read-write over USB MSC
 and then chains into F-06 and F-15. F-34 is smartcard-driven stack corruption
@@ -144,10 +255,18 @@ Address handling splits by network. The Bitcoin side holds under the full
 BIP-173/350 vector set. The Liquid side does not: F-35 shows that the
 confidential-address encoder is not gated by script type, so distinct
 scriptPubKeys render as one address, and scripts with no address representation
-render as well-formed confidential addresses. That is a third display-to-output
-divergence, alongside ✅ F-01 / ✅ F-02 on Bitcoin — both now fixed — and F-11 on
-Liquid amounts, which is not. F-35 is therefore the only display-to-output
-divergence of this family still open in the current tree, together with F-11.
+render as well-formed confidential addresses. The two encoders are the same
+code with the Liquid copy's validity checks commented out, which makes this the
+cheapest High-value fix in the report.
+
+One structural observation sits above the individual findings, and it changes
+the remediation order. This branch is not a descendant of `origin/master`: it
+carries that branch's dependency bumps and its security documentation, but
+leaves behind three of its security fixes. Two findings below (DOC-02, DOC-03)
+and part of a third (F-24) exist only because of that gap, and the shipped
+`docs/security-info.md` describes controls the code on this branch does not
+have. Section 1.3 records it in full; it is the first item in the remediation
+priority in §12.1.
 
 This report does not claim exhaustive repository security. Descriptor
 Miniscript and TapTree internals, Liquid issuance, flattened HAL/FatFs/USB
@@ -156,107 +275,125 @@ only partly reviewed or untested.
 
 ## 3. Executive summary
 
+### 3.0 Finding counts
+
+| Class | Count | Critical | High | Medium | Low | Informational |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| F (findings) | 29 | 0 | 8 | 16 | 5 | 0 |
+| H (hardening) | 25 | 0 | 0 | 0 | 23 | 2 |
+| D (dependency) | 3 | 0 | 0 | 0 | 0 | 3 |
+| DOC (doc-vs-code) | 3 | 0 | 0 | 2 | 1 | 0 |
+| **Total** | **60** | **0** | **8** | **18** | **29** | **5** |
+
+By severity:
+
+- **Critical:** none.
+- **High:** F-03, F-04, F-06, F-17, F-21, F-22, F-31, F-32.
+- **Medium:** F-05, F-07, F-08, F-10, F-11, F-15, F-18, F-19, F-23, F-24, F-25,
+  F-28, F-30, F-33, F-34, F-35, DOC-02, DOC-03.
+- **Low:** F-09, F-13, F-14, F-16, F-36, H-01, H-03, H-05, H-06, H-08, H-09,
+  H-10, H-11, H-12, H-13, H-14, H-15, H-16, H-17, H-18, H-19, H-20, H-21, H-22,
+  H-23, H-24, H-25, H-27, DOC-01.
+- **Informational:** H-04, H-26, D-01, D-02, D-03.
+
+H-04 is a recorded negative result — a GUI preemption path that was examined
+and found sound. It is kept because the absence of a defect there is itself
+load-bearing for the confirmation model.
+
+**Three of these are cheaper than they look.** DOC-02, DOC-03, and part of F-24
+are fixed by code that already exists in this repository on `origin/master` and
+is simply absent from this branch. See §1.3.
+
 ### 3.1 Highest-priority theft paths
 
 Ordered by attacker gain, then by impact.
 
-1. **Critical: ✅ F-01 — v0 PSBT output scopes honor v2-only amount and script
-   fields.** The device can show a benign payment while signing the original
-   global transaction's attacker output. A forged wallet-owned scope can also
-   mark the real payment as change and drop it from the transaction screen. The
-   attacker profits: the funds land at an address they chose.
-2. **High: ✅ F-02 — v0 PSBT input scopes honor v2-only txid, vout, and sequence
-   fields.** The displayed input amount and fee can differ from the outpoint
-   being signed. The scope sequence can also differ from the signed global
-   sequence, but v1.9.0 never displays sequences. The legacy sighash does not
-   commit to input amounts, so the signature stays valid for the real, larger
-   UTXO. The excess is paid as miner fees, so the attacker profits only through
-   a miner.
-3. **High: F-03 — `inp.verify()` failures are ignored.** A multi-input,
+1. **High: F-03 — `inp.verify()` failures are ignored.** A multi-input,
    multi-session SegWit miner-fee attack can collect individually valid
-   signatures while each session shows a small fee. Same impact class as ✅ F-02,
-   and reachable for SegWit inputs where ✅ F-02 is not. **F-03 is not covered by
-   the ✅ F-01 / ✅ F-02 fix and remains open** — it is a discarded return value in
-   this repository's wallet manager, not a parser defect in `embit`.
-4. **High: F-04 — host-selected derived keys are signed without proving script
+   signatures while each session shows a small fee. The return value of the
+   verification call is discarded in this repository's wallet manager, and
+   `is_verified` is never consulted anywhere in `src/`.
+2. **High: F-04 — host-selected derived keys are signed without proving script
    membership.** A malicious PSBT can request a signature from any derivation
    path whose public key it knows, even when that key is absent from the input
    script. F-05 supplies the unconfirmed arbitrary-path xpub oracle needed to
    build the request.
-5. **High: F-31 — a short Liquid rangeproof length reaches an out-of-bounds
+3. **High: F-31 — a short Liquid rangeproof length reaches an out-of-bounds
    native write before confirmation.** Unsigned arithmetic underflows the
    streaming rewind loop, which then writes attacker bytes past a fixed SDRAM
    arena. No key-extraction chain was established, but this is a pre-auth memory
    corruption primitive on a signing device.
-6. **High: F-17 — firmware authorization shares one signing domain with user
+4. **High: F-17 — firmware authorization shares one signing domain with user
    message signing.** The bootloader verifies firmware using
    `sha256(sha256("\x18Bitcoin Signed Message:\n" || len || M))`. The
    `signmessage` app computes the same value. A host that reaches a release-key
    holder's device can get a valid firmware signature by asking for an ordinary
    message signature.
-7. **High: F-21 — message signing shows less than it signs.** A NUL byte in the
+5. **High: F-21 — message signing shows less than it signs.** A NUL byte in the
    message truncates what the screen draws but not what is hashed. The
    `.decode("ascii")` guard also does not check ASCII at all, so invisible and
    right-to-left Unicode passes through. This is a second display/signing
    divergence, on the same prompt that F-17 turns into a firmware-release
    prompt.
-8. **High: F-22 — a swapped smartcard can skip the PIN screen.** The device
+6. **High: F-22 — a swapped smartcard can skip the PIN screen.** The device
    believes whatever PIN state the card reports. A card that answers "unlocked"
    means `Specter.unlock()` never asks for a PIN, so the anti-phishing words —
    the only card-swap defense in the design — are never shown.
-9. **High: F-06 — flash-backed PIN protection allows cheap offline
+7. **High: F-06 — flash-backed PIN protection allows cheap offline
    verification.** After internal-flash readout, each PIN guess costs one
    HMAC-SHA256, and the resulting material unwraps the stored mnemonic.
-10. **High (Plausible): F-32 — an early boot exception leaves CDC and MSC
-    enabled.** MicroPython then exposes both flash partitions read-write before
-    PIN entry. This directly enables F-06 and supplies F-15's persistent QSPI
-    implant. Only the attacker's ability to induce the hardware fault is
-    untested.
-11. **Medium: F-15 — production imports unsigned Python from writable QSPI.**
-    `/qspi/config.py` executes before PIN entry without replacing signed
-    firmware or changing the anti-phishing secret. Physical QSPI write is the
-    standalone prerequisite. F-32 supplies a software-mediated writer.
-12. **Medium: F-34 — a malicious smartcard can trigger a native one-byte stack
+8. **High (Plausible): F-32 — an early boot exception leaves CDC and MSC
+   enabled.** MicroPython then exposes both flash partitions read-write before
+   PIN entry. This directly enables F-06 and supplies F-15's persistent QSPI
+   implant. Only the attacker's ability to induce the hardware fault is
+   untested.
+9. **Medium: F-15 — production imports unsigned Python from writable QSPI.**
+   `/qspi/config.py` executes before PIN entry without replacing signed
+   firmware or changing the anti-phishing secret. Physical QSPI write is the
+   standalone prerequisite. F-32 supplies a software-mediated writer.
+10. **Medium: F-34 — a malicious smartcard can trigger a native one-byte stack
     overflow before PIN entry.** The off-by-one write is confirmed in production
     connect and transmit paths. Exact stack-slot corruption and exploitability
     need target validation.
-13. **Medium: F-33 and F-25 — firmware protection is not persistent.** An
+11. **Medium: F-33 and F-25 — firmware protection is not persistent.** An
     unsigned SD image clears write protection before authentication and leaves it
     off after rejection. With flash write access, boot-time CRC32 records accept
     persistent replacement firmware.
-14. **Medium: F-19 — security-critical text scrolls while Confirm stays fixed.**
+12. **Medium: F-19 — security-critical text scrolls while Confirm stays fixed.**
     The fee and every in-transaction warning sit below an attacker-chosen number
     of outputs in a scrolling container. The Confirm button is a fixed child of
     the screen.
-15. **Medium: F-11 — Liquid input amounts and assets are displayed without
+13. **Medium: F-11 — Liquid input amounts and assets are displayed without
     checking their cleartext values and blinders against the confidential
     commitments.**
-16. **Medium: F-23 — Liquid asset names are supplied by the host.** There is no
+14. **Medium: F-23 — Liquid asset names are supplied by the host.** There is no
     trusted label for the network's own policy asset, so a host can get real
     L-BTC displayed under any name it likes.
-17. **Medium: F-35 — a displayed Liquid address does not identify one
+15. **Medium: F-35 — a displayed Liquid address does not identify one
     scriptPubKey.** The confidential-address encoder is not gated by script type
     and reduces the leading opcode modulo `0x50`, and every validity check in the
     Liquid `blech32` decoder is commented out. Reproduced: `5120…`, `0120…`,
     `a120…`, and `f120…` all render as one address string, and `6a14…`
     (OP_RETURN) renders as a well-formed `lq16…` address. The equivalent Bitcoin
     encoder is gated and holds.
-18. **Medium: F-24 — the transaction screen is incomplete by default.** Change
+16. **Medium: F-24 — the transaction screen is incomplete by default.** Change
     outputs are never labelled "change" anywhere (dead code), a gap-limit warning
     is silently overwritten by the watch-only warning, and there is no fee sanity
     check of any kind.
-19. **Medium: F-18 — the TRNG driver fails open.** `rng_get()` returns `0` after
-    a 10 ms timeout and never inspects the seed-error or clock-error status bits.
-    Seed recovery also needs the failure to persist while the software pool holds
-    no attacker-unknown input. Earlier touch entropy survives a transient
-    failure.
-20. **Medium: F-30 — `SIGHASH_NONE` and `ANYONECANPAY` are accepted after a
+17. **Medium: F-18 — the native TRNG driver fails open.** `rng_get()` returns
+    `0` after a 10 ms timeout and never inspects the seed-error or clock-error
+    status bits, so a failed peripheral is indistinguishable from zero entropy
+    at the C boundary. A Python-layer liveness check in `src/rng.py` catches a
+    stalled peripheral but cannot see the status bits or detect bias.
+18. **Medium: F-30 — `SIGHASH_NONE` and `ANYONECANPAY` are accepted after a
     generic warning.** The resulting input signature can authorize a payment
     assembled after approval.
-21. **Medium: F-05 — arbitrary-path xpubs and the device fingerprint are exported
+19. **Medium: F-05 — arbitrary-path xpubs and the device fingerprint are exported
     over enabled USB without per-request confirmation.**
 
 ### 3.2 Defenses that hold
+
+Each of these is a positive result with its evidence recorded in Section 9.1.
 
 - Bootloader signature threshold logic, signer lookup, duplicate rejection, and
   signature return-code handling are sound. Signature counting iterates records
@@ -273,14 +410,28 @@ Ordered by attacker gain, then by impact.
   signatures. It is **not** separated from firmware authorization (F-17), and the
   confirmation does not reliably show what is signed (F-21).
 
-- Change ownership normally re-derives and compares the output script. The
-  v2-field override makes the compared scope itself untrustworthy.
+- Change ownership re-derives the descriptor at the claimed index and compares
+  the scriptPubKey, and `Wallet.fill_scope()` replaces host-supplied redeem and
+  witness scripts with descriptor-derived versions, so ownership rests on a
+  device-derived script rather than a host assertion (PATH-02).
+
+- The PSBT parser rejects v2-only scope fields inside a v0 PSBT, on both the
+  `PSBT.parse` and the `PSBTView` streaming path this firmware uses, and rejects
+  a v2 PSBT carrying a global transaction
+  ([psbt.py:162-163](../../f469-disco/libs/common/embit/src/embit/psbt.py#L162-L163),
+  [psbtview.py:352-354](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L352-L354),
+  [psbtview.py:289-290](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L289-L290)).
+  The guard fails closed: an omitted `version` kwarg defaults to `None`, which is
+  not 2. This invariant is enforced only in the dependency and pinned by no test
+  in this repository — see H-27.
 
 - Secure-channel replay is limited by session-specific ECDH material, a card
   nonce, directional keys, counters, MAC-before-decrypt, and renegotiation.
 
-- Vendored `embit` is identical to an upstream commit, and the checked-in
-  secp256k1 generator table matches its recomputation exactly.
+- The checked-in secp256k1 generator table matches its recomputation exactly:
+  all 1024 entries were recomputed from `gen_context.c`'s construction. Upstream
+  equivalence is **not** established for the six forked submodule trees
+  (§1.2, PATH-18).
 - The Python layer contains no malware indicators: no `eval`, no `exec`, no
   `compile` of data, no sockets, no HTTP, no hardcoded seeds, keys, addresses, or
   domains. Ordinary import resolution is still a security boundary: F-15
@@ -311,8 +462,6 @@ Ordered by attacker gain, then by impact.
 
 | Severity | ID | Result |
 | --- | --- | --- |
-| Critical | ✅ F-01 | v2-only PSBT output fields decouple displayed outputs from signed outputs — **fixed in the current tree** |
-| High | ✅ F-02 | v2-only PSBT input fields decouple displayed input data from the signed transaction — **fixed in the current tree** |
 | High | F-03 | Input verification failures are discarded |
 | High | F-04 | Derived keys are signed without the root-key script-membership check |
 | High | F-21 | Message signing displays less than it signs |
@@ -321,7 +470,7 @@ Ordered by attacker gain, then by impact.
 | Medium | F-05 | USB exports arbitrary-path xpubs and the fingerprint without confirmation |
 | Medium | F-11 | Liquid input values and assets are displayed from unverified fields |
 | Medium | F-15 | A production boot import executes unsigned Python from writable QSPI |
-| Medium | F-18 | The hardware TRNG fails open and emits zero-valued words |
+| Medium | F-18 | The native TRNG driver fails open and emits zero-valued words |
 | Medium | F-19 | Confirmation buttons stay fixed while security-critical text scrolls |
 | Medium | F-23 | Liquid asset names are chosen by the host |
 | Medium | F-24 | The transaction screen is incomplete by default |
@@ -354,7 +503,8 @@ deliberately not relabelled as vulnerabilities.
 | Hardening | Low | F-09, F-13, F-14 |
 
 Section 7 holds the additional `H-*` observations. Dependency items D-01 to
-D-03 are in Section 8.
+D-03 are in Section 8.9, and the three doc-vs-code items DOC-01 to DOC-03 are
+in Section 8.10.
 ## 4. Components and trust boundaries
 
 ### 4.1 Component inventory
@@ -412,7 +562,7 @@ in that row has the stated access.
 | Smartcard keystore and JavaCard stack | Private and derived keys once the mnemonic is loaded into the inherited RAM keystore; seeds; mnemonics; entropy; blinding keys; transaction data; PSBTs and PSETs passed for signing; signatures; PINs; device and secure-element secrets; persistent storage; backup files | **Mediated:** card-resident secret-blob and PIN operations cross the secure-element channel |
 | External smartcard and applet | Card identity and channel private keys; seed entropy in the card secret blob; PINs; secure-element secrets; card persistent storage; secure-channel signatures | **Boundary:** the mnemonic and spending keys are rebuilt on the MCU after blob retrieval. The reviewed host code never passes the card transaction data, PSBTs/PSETs, descriptors, addresses, backups, or firmware updates |
 | RNG, platform, filesystem, storage glue | Entropy; device secrets; persistent storage; backup files | **Opaque transport:** mnemonics, PSBTs and PSETs, descriptors, and firmware updates can traverse file or device APIs without this layer interpreting them |
-| Vendored `embit` | Private keys; seeds; mnemonics; entropy and BIP-85 entropy; derived keys; Liquid blinding keys; transaction data; PSBTs and PSETs; descriptors; addresses; signatures | No PIN, device-secret, secure-element, persistent-storage, backup, or firmware-update access is intrinsic to the library |
+| `embit` | Private keys; seeds; mnemonics; entropy and BIP-85 entropy; derived keys; Liquid blinding keys; transaction data; PSBTs and PSETs; descriptors; addresses; signatures | No PIN, device-secret, secure-element, persistent-storage, backup, or firmware-update access is intrinsic to the library |
 | secp256k1 binding and linked library | Private keys; entropy for nonce or context operations; derived EC keys and tweaks; Liquid blinding keys, generators, and proofs; signatures | It receives digests, not full transaction data, PSBTs/PSETs, descriptors, addresses, PINs, storage, backups, or firmware updates |
 | Bootloader | Signatures used for firmware authorization; persistent internal-flash contents; firmware-update data | It has no designed access to wallet private keys, seeds, mnemonics, PINs, device or secure-element secrets, backups, PSBTs/PSETs, descriptors, or addresses |
 | Production bootstrap, MicroPython, LVGL, FatFs, board/HAL, native runtime | Every runtime asset can be resident in interpreter memory, rendered by LVGL, or moved through native memory and file/device APIs | Access is path-dependent. No claim is made that every subcomponent sees every asset, only that this aggregate runtime boundary can host or transport all of them |
@@ -432,7 +582,7 @@ in that row has the stated access.
    `Specter.process_host_request` at
    [src/specter.py:606-652](../../src/specter.py#L606-L652). Applications handle
    confirmation. There is no central authorization gate.
-3. **Parser to display.** Wallet managers and vendored `embit` turn hostile
+3. **Parser to display.** Wallet managers and `embit` turn hostile
    PSBT/PSET data into confirmation metadata.
 4. **Display to key use.** A positive GUI result allows keystore and native
    secp256k1 signing.
@@ -453,10 +603,10 @@ findings that bypass or weaken a gate are listed in the final column.
 
 | Hostile source | Entry and normal gate | Parser or dispatcher | Sensitive operation or asset | Security result |
 | --- | --- | --- | --- | --- |
-| QR scanner bytes | User starts scanning after unlock | `QRHost.scan` / `process_chunk` → legacy BCUR, `microur`, or normal multipart → `Specter.process_host_request` | PSBT/PSET signing, descriptor import, message requests, mnemonic-import fallback | ✅ F-01, ✅ F-02, F-03, F-04, F-16, F-28, H-08, H-13. Confirmation is operation-specific |
-| Enabled USB VCP peer | USB is off by default and enabled from the unlocked main menu | `USBHost.update` writes a fixed RAM file → `Specter.process_host_request` | Every host command, signing, xpub/fingerprint, entropy, label, wallet metadata | ✅ F-01 to F-05, F-14, F-21, F-23, F-30. Boot-failure behavior is assessed separately |
-| SD-card directory and file bytes | User selects a top-level `.psbt`, `.txt`, or `.json` file after unlock | `SDHost` copies the file to a fixed RAM path → central dispatch | Signing, descriptor/backup import, mnemonic fallback. The bootloader consumes upgrade files independently | ✅ F-01, ✅ F-02, F-03, F-04. No application-level execution primitive. Native FatFs is a separate boundary |
-| PSBT/PSET fields | Accepted host transport and signing request | `embit` scope/view parsers → wallet manager preprocessing | Wallet identification, input/output verification, fee and change display, sighash generation, signature | ✅ F-01, ✅ F-02, F-03, F-04, F-10, F-11, F-23, F-24, F-30 |
+| QR scanner bytes | User starts scanning after unlock | `QRHost.scan` / `process_chunk` → legacy BCUR, `microur`, or normal multipart → `Specter.process_host_request` | PSBT/PSET signing, descriptor import, message requests, mnemonic-import fallback | F-03, F-04, F-16, F-28, H-08, H-13. Confirmation is operation-specific |
+| Enabled USB VCP peer | USB is off by default and enabled from the unlocked main menu | `USBHost.update` writes a fixed RAM file → `Specter.process_host_request` | Every host command, signing, xpub/fingerprint, entropy, label, wallet metadata | F-03, F-04, F-05, F-14, F-21, F-23, F-30. Boot-failure behavior is assessed separately |
+| SD-card directory and file bytes | User selects a top-level `.psbt`, `.txt`, or `.json` file after unlock | `SDHost` copies the file to a fixed RAM path → central dispatch | Signing, descriptor/backup import, mnemonic fallback. The bootloader consumes upgrade files independently | F-03, F-04. No application-level execution primitive. Native FatFs is a separate boundary |
+| PSBT/PSET fields | Accepted host transport and signing request | `embit` scope/view parsers → wallet manager preprocessing | Wallet identification, input/output verification, fee and change display, sighash generation, signature | F-03, F-04, F-10, F-11, F-23, F-24, F-30 |
 | Descriptor, wallet name, xpub, fingerprint, derivation, address | Host command or compatibility parser. Import and address screens confirm per operation | `Wallet.parse`, `Descriptor.from_string`, ownership helpers, xpub/message apps | Wallet policy, change ownership, displayed address, arbitrary derived public keys or signatures | F-04, F-05, H-19. The reviewed descriptor ownership path re-derives scripts |
 | Message bytes and requested derivation | `signmessage` command after unlock and mnemonic load | Message parser → confirmation screen → keystore message signing | Recoverable signature at a host-selected path | F-17, F-21. PATH-05 blocks reuse as a transaction signature |
 | Entropy and secret-export requests | Host app dispatch or a user-selected GUI app | `getrandom`, BIP85, xpub, blinding key, backup, and wallet-export flows | Raw TRNG bytes, derived entropy, xpubs, master blinding key, mnemonic/backup material | F-05, F-14, H-03, H-11, H-21. The command table in 4.5 defines each gate |
@@ -482,7 +632,7 @@ disabled ([src/specter.py:115-132](../../src/specter.py#L115-L132),
 
 | Command or message | Channel/application | Normal gate | Confirmation and effect |
 | --- | --- | --- | --- |
-| `sign <psbt-or-base64>`; bare PSBT/PSET magic; `cHNi`/`cHNl`; decoded `UR:BYTES` signing payload | Wallet app over QR, enabled USB, or a selected SD file | PIN + KEY | Sighash, already-signed, wallet, and `TransactionScreen` prompts. ✅ F-01, ✅ F-02, F-03, F-04, F-30 |
+| `sign <psbt-or-base64>`; bare PSBT/PSET magic; `cHNi`/`cHNl`; decoded `UR:BYTES` signing payload | Wallet app over QR, enabled USB, or a selected SD file | PIN + KEY | Sighash, already-signed, wallet, and `TransactionScreen` prompts. F-03, F-04, F-30 |
 | `addwallet <name>&<descriptor>` or a bare descriptor | Wallet/compatibility app | PIN + KEY | `ConfirmWalletScreen`. Persists wallet policy |
 | `showaddr <type> <path> [redeem]` or `bitcoin:<address>?index=N` | Wallet app | PIN + KEY | Blocking `WalletScreen`. Verifies and displays an address |
 | `listwallets` | Wallet app | PIN + KEY | No per-request confirmation. Exports public wallet metadata |
@@ -539,7 +689,7 @@ records what was actually read, not the wider directory that owns it.
 | Component | Tier | Files/directories inspected | Security relevance | Depth | Evidence produced | Open questions | Recommended dynamic tests |
 | --- | ---: | --- | --- | --- | --- | --- | --- |
 | Application core and dispatcher | 1 | `src/specter.py`, `src/main.py`, `src/helpers.py`, every module under `src/apps/` | Routes all host requests, confirmations, signing, secret exports, and keystore selection | Deep | Host convergence, absence of a central authorization gate, per-application confirmation inventory, mnemonic-import fallback | Lower parser, GUI, runtime, and hardware layers are separate rows | Regression-test every host prefix against its expected confirmation and privilege boundary |
-| Bitcoin wallet and signing application | 1 | `src/apps/wallets/manager.py`, `src/apps/wallets/wallet.py`, Bitcoin signing and display paths | Turns hostile PSBT data into wallet ownership, display metadata, confirmation, and signatures | Deep | ✅ F-01, ✅ F-02, F-03, F-04, F-24, F-30, and the reviewed descriptor ownership path | Advanced Miniscript/TapTree policies and unread embit internals are separate rows | Reproduce ✅ F-01, ✅ F-02, F-03, F-04 and F-30 on target. Compare displayed metadata with the exact sighash source |
+| Bitcoin wallet and signing application | 1 | `src/apps/wallets/manager.py`, `src/apps/wallets/wallet.py`, Bitcoin signing and display paths | Turns hostile PSBT data into wallet ownership, display metadata, confirmation, and signatures | Deep | F-03, F-04, F-24, F-30, and the reviewed descriptor ownership path | Advanced Miniscript/TapTree policies and unread embit internals are separate rows | Reproduce F-03, F-04 and F-30 on target. Compare displayed metadata with the exact sighash source |
 | Liquid wallet and signing application | 1 | Liquid manager input/output metadata, asset registry, host commands, display paths, native proof call sites | Turns hostile PSET data and asset metadata into Liquid display and signatures | Moderate | F-11, F-23, F-30, F-31, H-03, and Bitcoin/Liquid manager separation | Issuance, reissuance, and the remaining PSET internals | Exercise mismatched commitments, issuance fields, asset labels, all Liquid sighash modes, and F-31 on target |
 | Application USB and SD adapters | 1 | `src/hosts/usb.py`, `src/hosts/sd.py`, central dispatch in `src/specter.py` | First firmware handlers for hostile USB lines and selected SD files | Deep | F-05 reachability, no application-level execution primitive, fixed RAM-file dispatch | FatFs, mount behavior, and native USB/SD drivers are separate rows | Fuzz filenames, file contents, framing, interruption, and oversized input on target |
 | Application QR and multipart decoders | 1 | The whole `src/hosts/qr.py` state machine, legacy BCUR dispatch, and the whole `f469-disco/libs/common/microur/` decoder | Reassembles attacker-controlled frames before privileged dispatch | Deep | F-16, F-28, H-08, H-13, and a state-machine inventory | External scanner firmware and target transport timing | Fuzz mixed streams, indexes, counts, checksums, bytewords, oversized sequences, discarded CBOR lengths, and scanner timing |
@@ -550,17 +700,17 @@ records what was actually read, not the wider directory that owns it.
 | Smartcard keystore and channel stack | 1 | `src/keystore/memorycard.py`, the whole JavaCard host stack, native `usermods/scard` UART/connection/T=1 receive paths | Delegates identity, PIN state, counters, protected seed storage, and native framing across an external boundary | Deep | F-07, F-22, F-34, H-10, H-14, H-23, replay defenses, and bounded T=1 buffers except F-34 | External applet source, real-card PIN enforcement, interposition, exact F-34 stack effect | Emulate unlocked and substituted cards. Fuzz ATR/T=1 timing, PPS, replay, errors, counter rollback, removal, and malicious blobs |
 | External smartcard applet | 1 | No card-side source is present. Only the host protocol and the observed contract were inspectable | Card-resident identity, PIN attempt counter, channel keys, and secret release are security-critical | Shallow | Repository-boundary gap recorded | Whether deployed applet behavior matches any reviewable source | Obtain and audit the applet source. Verify build and provenance. Run card substitution and fault tests |
 | Entropy and randomness path | 1 | `src/rng.py`, `src/helpers.py`, STM32 `rng_get`, the `os.urandom` path, signing nonce call sites | Generates mnemonic entropy and supplies cryptographic random material | Moderate | F-14, F-18, and a verified deterministic RFC6979 path | Real TRNG fault frequency, source health, touch entropy, side channels | Inject stuck, zero, and error TRNG states and check fail-closed seed generation. Measure the touch contribution |
-| Vendored embit PSBT/PSET signing core | 1 | `psbt.py`, `psbtview.py`, the relevant sighash and `sign_input` paths, upstream delta | Parses hostile signing containers and picks the exact transaction digest | Deep | ✅ F-01, ✅ F-02, F-03, F-04, F-10, F-11, and byte-identical upstream match | Target MicroPython behavior and the unreviewed parser families below | Differentially fuzz scope and global data, declared lengths, duplicates, versions, and field order |
-| Vendored embit address construction and encoding | 1 | `script.py`, `base58.py`, `bech32.py`, `networks.py`, `liquid/blech32.py`, `liquid/addresses.py`, `liquid/networks.py` in full; address call sites in `src/apps/` and `src/gui/screens/transaction.py` | Determines whether the address the user approves matches the scriptPubKey that is signed | Deep | F-35, F-36, H-25, H-26, PATH-34 to PATH-40, and the full BIP-173/350 vector set executed against `bech32.py` | Taproot output-key tweaking and Miniscript/TapTree construction feed this layer and are covered in the row below | Run the BIP-350 vector set and a Liquid script-type matrix (OP_RETURN, bare multisig, non-standard leading bytes, non-v0 witness versions) as on-target regressions |
-| Vendored embit descriptor, policy, and derived-secret internals | 1 | Selected `descriptor.py`, ownership, derivation, and BIP32 depth paths | Determines multisig policy, derivation, BIP85, and SLIP77 behavior | Shallow | The reviewed ownership path, and the H-15 path-depth item | `transaction.py`, `bip85.py`, `slip77.py`, full Miniscript and TapTree behavior | Malformed descriptors and scripts, deep recursion, derived-secret isolation tests |
+| `embit` PSBT/PSET signing core | 1 | `psbt.py`, `psbtview.py`, the relevant sighash and `sign_input` paths, upstream delta | Parses hostile signing containers and picks the exact transaction digest | Deep | F-03, F-04, F-10, F-11, and the v0/v2 scope-field version guard (PATH-41) | Target MicroPython behavior and the unreviewed parser families below | Differentially fuzz scope and global data, declared lengths, duplicates, versions, and field order |
+| `embit` address construction and encoding | 1 | `script.py`, `base58.py`, `bech32.py`, `networks.py`, `liquid/blech32.py`, `liquid/addresses.py`, `liquid/networks.py` in full; address call sites in `src/apps/` and `src/gui/screens/transaction.py` | Determines whether the address the user approves matches the scriptPubKey that is signed | Deep | F-35, F-36, H-25, H-26, PATH-34 to PATH-40, and the full BIP-173/350 vector set executed against `bech32.py` | Taproot output-key tweaking and Miniscript/TapTree construction feed this layer and are covered in the row below | Run the BIP-350 vector set and a Liquid script-type matrix (OP_RETURN, bare multisig, non-standard leading bytes, non-v0 witness versions) as on-target regressions |
+| `embit` descriptor, policy, and derived-secret internals | 1 | Selected `descriptor.py`, ownership, derivation, and BIP32 depth paths | Determines multisig policy, derivation, BIP85, and SLIP77 behavior | Shallow | The reviewed ownership path, and the H-15 path-depth item | `transaction.py`, `bip85.py`, `slip77.py`, full Miniscript and TapTree behavior | Malformed descriptors and scripts, deep recursion, derived-secret isolation tests |
 | secp256k1 core binding call paths | 1 | `mpy/libsecp256k1.c` in full; `libsecp256k1-config.h`, `ext_callbacks.c`, `secp256k1_build.c`, `micropython.mk` | Native boundary handling private keys, signatures, points, and fixed-size attacker data | Deep | F-13 reachability, F-14, H-01, H-09, H-17, PATH-04, PATH-20 | Fault and side-channel behavior. Timing distinguishability of secret-dependent proof failures | Enforce the context-size bound. Force GC exhaustion against each allocation path. Fuzz fixed-size arguments and time secret-dependent failures |
 | secp256k1 proof and extended binding paths | 1 | `mpy/config/rangeproof_preallocated/` in full; all rangeproof, surjectionproof, generator, Pedersen, Schnorr, and preallocated entry points; direct Liquid call sites | Proof code accepts hostile native inputs | Deep | F-31, H-16, H-17, PATH-20, PATH-21, verified arena ordering and rewind-message bounds | SDRAM contents above `0xC03EE000`, FMC aliasing, and upstream borromean/surjection/generator internals assumed correct | Execute F-31 with a short proof field. Verify H-16 with the project compiler. Fuzz proof offsets, lengths, generators, and allocation failure |
 | Bootloader signature authorization | 1 | Signature threshold and counting loop, key sets, build guard, signed-message construction, host signing tools | Establishes the firmware root of trust at upgrade time | Deep | F-08, F-17, and verified duplicate, known-key, threshold, and return-code handling | Deployed key configuration and release-key operation. The surrounding pre-auth erase/write sequence is F-33 | Mutate signer order, duplicates, unknown and bad signatures, image bytes, and configured key sets |
 | Bootloader persistence, downgrade, and recovery | 1 | `bootloader.c`, `bl_section.c`, `bl_integrity_check.c`, `bl_kats.c`, `bl_util.c`, `startup_mailbox.c`, `startup.c`, flash and option-byte `bl_syscalls.c`, linker maps, platform Makefiles, tools | Controls rollback, boot-time integrity, recovery, flash selection, and hardware protection state | Deep | F-25, F-33, H-20, PATH-23 to PATH-29 | Hardware confirmation of option-byte state, power-cut timing, forged-record behavior | Fuzz records and mailbox. Power-cut each erase step. Attempt downgrade and record replacement. Read option bytes before and after a rejected upgrade |
 | Production runtime and platform glue | 2 | `boot/main/`, mount/CWD/import resolution, storage partitioning, wipe, RNG, native smartcard transport and T=1, manifest and freeze selection, board and build configuration | MicroPython, HAL, storage, display, USB, and native user modules run inside the trusted boundary | Moderate | F-15, F-18, F-32, F-34, H-22 to H-24, and exact-number, import, and storage behavior | Full FatFs, STM32 HAL/USB/SDMMC memory safety, general interpreter content, hardware timing and remanence | Exercise boot faults, QSPI implants, wipe recovery, malicious smartcards, malformed filesystems and USB, reset, and memory remnants |
 | Build, packaging, release, and CI | 2 | `Dockerfile`, `build_firmware.sh`, root and bootloader Makefiles, packaging tools, manifests, Nix and shell definitions, workflows | Selects source, toolchain, trust roots, signatures, and released artifacts | Deep | F-08, F-09, and static deterministic-build evidence | Official release provenance and empirical reproducibility | Run two clean cross-machine builds, import published signatures, and compare every release artifact hash |
-| Frozen/generated source and release artifacts | 2 | Manifest and generator inputs. The checked-in secp256k1 table was recomputed | Generated executable code and opaque release images can diverge from reviewed source | Moderate | All 1024 generator table entries matched. Deterministic inputs identified | No official v1.9.0 binary was obtained or compared | Recompute generated files during the build and compare clean builds with the official signed binaries |
-| Project security and build documentation | 2 | `docs/security.md`, build and reproducibility docs, bootloader docs | Defines the user-facing threat model and the release/security claims | Moderate | The 23-claim security-model differential in Section 8 | No separate current threat-model document. Some hardware claims are not statically attestable | Validate deployed option bytes, scanner firmware, and the published release procedure against hardware and artifacts |
+| Frozen/generated source and release artifacts | 2 | Manifest and generator inputs. The checked-in secp256k1 table was recomputed | Generated executable code and opaque release images can diverge from reviewed source | Moderate | All 1024 generator table entries matched. Deterministic inputs identified | No official release binary was obtained or compared | Recompute generated files during the build and compare clean builds with the official signed binaries |
+| Project security and build documentation | 2 | `docs/security-info.md` in full, build and reproducibility docs, bootloader docs | Defines the user-facing threat model and the release/security claims | Moderate | The claim-by-claim security-model differential in Section 8.10, including DOC-01 and DOC-02 | Some hardware claims are not statically attestable | Validate deployed option bytes, scanner firmware, and the published release procedure against hardware and artifacts |
 | Dependency provenance | 2 | Recursive gitlinks, declared origins, upstream resolution, embit per-file hashes, the LVGL relation, generator-table construction | Detects substitution, mutable pins, unexplained forks, and opaque signing-path constants | Deep | All gitlinks resolve. embit and the generator table match. The LVGL relation is resolved. D-01 divergence measured | Official artifact provenance | Repeat provenance and generated-table checks automatically in CI |
 | Dependency content and known-issue exposure | 2 | All 63 MicroPython fork-only commits; the whole native secp binding and custom proof module; selected LVGL, FatFs, embit, microur, smartcard, storage, and build dependencies | Dependencies run in-process with keys or parse hostile data | Moderate | D-01 to D-03, F-31, F-34, H-16, H-17, H-22, H-23 | Flattened HAL/FatFs/USB trees lack upstream SHAs. Systematic upstream-advisory and backport review is incomplete | Restore provenance. Review advisories and backports. Fuzz native dependency boundaries on target |
 | Simulator | 2 | `simulate.py`, simulator manifest, platform, and GUI entry points, production-selection checks | Replaces entropy, storage, hardware, transport, and physical confirmation, and can mislead assurance | Moderate | The simulator is excluded from the production freeze path. Target-only H-16 ABI behavior identified | Full security-regression parity and target equivalence | Run every portable regression vector in the simulator, then repeat hardware-dependent results on target |
@@ -573,319 +723,13 @@ result.
 
 ## 6. Findings
 
-Findings are ordered by severity: Critical, then High, Medium, and Low. Within a
-severity level they are ordered by identifier.
+Findings are ordered by severity: High, then Medium and Low. Within a severity
+level they are ordered by identifier. Identifiers are stable handles and are not
+contiguous.
 
 Each finding starts with a classification block, then evidence, an attack trace,
-why existing checks do not stop it, and a recommended fix.
-
----
-
-### ✅ F-01: v2-only PSBT output fields decouple displayed outputs from signed outputs
-
-**Status:** Confirmed at v1.9.0 · **Fixed in the current tree** ·
-**Severity:** Critical · **Confidence:** High
-
-> **Fix:** the `embit` submodule rejects v2-only output-scope keys `0x03`
-> (`PSBT_OUT_AMOUNT`) and `0x04` (`PSBT_OUT_SCRIPT`) inside a v0 PSBT
-> ([psbt.py:548](../../f469-disco/libs/common/embit/src/embit/psbt.py#L548),
-> [psbt.py:162-163](../../f469-disco/libs/common/embit/src/embit/psbt.py#L162-L163)).
-> `PSBTView` plumbs the parsed version into every scope read
-> ([psbtview.py:364-366](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L364-L366)),
-> so the streaming path this firmware uses is covered, not just `PSBT.parse`.
-> The check fails closed: an omitted `version` kwarg defaults to `None`, which is
-> not 2. A v2 PSBT carrying a global transaction is rejected separately
-> ([psbtview.py:289-290](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L289-L290)),
-> closing the other direction. Both variants below were replayed against both
-> parse paths and rejected. **No regression test covers this**, and the display
-> invariant is still enforced only in the dependency — see the ✅ F-01 entry in
-> [audit-comparison.md](audit-comparison.md).
-
-- **Affected component:** Bitcoin PSBT parsing, output classification, display,
-  and signing.
-- **Files and code regions:**
-  [psbt.py:550-557](../../f469-disco/libs/common/embit/src/embit/psbt.py#L550-L557),
-  [psbt.py:622-625](../../f469-disco/libs/common/embit/src/embit/psbt.py#L622-L625),
-  [psbt.py:660](../../f469-disco/libs/common/embit/src/embit/psbt.py#L660);
-  [psbtview.py:356-366](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L356-L366),
-  [psbtview.py:390-404](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L390-L404),
-  [psbtview.py:467-474](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L467-L474);
-  [manager.py:721-768](../../src/apps/wallets/manager.py#L721-L768);
-  [transaction.py:12](../../src/gui/screens/transaction.py#L12),
-  [transaction.py:68-73](../../src/gui/screens/transaction.py#L68-L73).
-- **Functions and modules:** `OutputScope.read_value`, `PSBTView.vout`,
-  `PSBTView.hash_outputs`, wallet-manager output preprocessing.
-- **Attacker capability:** Supply a malicious v0 PSBT that contains v2-only
-  output scope keys through any accepted host transport.
-- **Prerequisites:** The user approves the substituted output display.
-- **Default reachability:** Every Bitcoin `sign` request over QR, USB, or SD.
-- **Impact on funds:** The user can approve a benign address, amount, and fee
-  while the signature pays the global transaction's attacker-controlled output.
-- **Physical access required:** No.
-- **Malicious host required:** Yes.
-- **Malicious SD/QR/USB input required:** Yes.
-- **Malicious firmware update required:** No.
-- **Prior compromise required:** No.
-- **Deterministic or probabilistic:** Deterministic.
-- **Security property violated:** Displayed recipients, amounts, and change
-  classification must match the exact outputs the signature commits to.
-- **Owning codebase:** Vendored `embit` plus this repository's wallet manager.
-
-**Evidence**
-
-`OutputScope.read_value` accepts these keys with no version check:
-
-```python
-elif k == b"\x03":
-    self.value = int.from_bytes(v, "little")
-elif k == b"\x04":
-    self.script_pubkey = Script(v)
-```
-
-For a v0 PSBT, `OutputScope.__init__` first seeds these fields from the global
-transaction. The hostile scope fields then overwrite them. The wallet manager
-uses the overwritten `out.value` and `out.script_pubkey` to build confirmation
-metadata. Signing computes output hashes from `PSBTView.vout`, which reads the
-untouched global transaction.
-
-There is one constraint on a usable exploit. The displayed fee is computed from
-the same overridden scope values (`fee -= value` at
-[manager.py:742](../../src/apps/wallets/manager.py#L742)). So an override that
-changes only an output *amount* inflates the displayed fee by exactly the amount
-it hides, and an attentive user would see it. A working exploit must keep the
-displayed total consistent. Two variants do, and both are the ones a real
-attacker would use.
-
-**Attack trace**
-
-*Variant A — value-preserving script substitution.* The scope keeps the real
-amount and overrides only `0x04`. The user sees the address they meant to pay.
-The global transaction pays the attacker. Every displayed number, including the
-fee, is correct.
-
-```text
-psbt version        : None (v0)
-scope/display value : 100000000     <- unchanged
-scope/display script: 0014<merchant script>   (0x04 override)
-global/signed value : 100000000
-global/signed script: 0014<attacker script>
-displayed fee       : correct
-divergence          : True (recipient only)
-re-serialized scope : 00            <- forged keys stripped by normalization
-```
-
-*Variant B — forged change classification.* The scope overrides `0x04` with a
-genuine wallet-owned script at an index inside the gap limit, and supplies the
-matching derivation. `Wallet.owns` and `get_derivation` run against the
-*overridden* script, so the scope is classified as change. The default
-transaction view drops it, and `send_amount` excludes it, so the headline total
-is wrong and the fee still reconciles.
-
-```text
-scope/display script: <wallet change script, index within gap limit>
-metaout["change"]   : True
-default view (page1): output omitted (change, no warning)
-details view (page2): output still listed
-send_amount         : excludes the hidden output — headline total is wrong
-global/signed script: 0014<attacker script>
-```
-
-Exactly: [transaction.py:69-74](../../src/gui/screens/transaction.py#L69-L74)
-skips unwarned change on the **first page only**:
-
-```python
-for out in meta["outputs"]:
-    if out["change"] and not out.get("warning", ""):
-        num_change_outputs += 1
-        continue
-    obj = self.show_output(out, obj)
-```
-
-The same output is still drawn on `page2`
-([transaction.py:88-140](../../src/gui/screens/transaction.py#L88-L140),
-[transaction.py:160-166](../../src/gui/screens/transaction.py#L160-L166)),
-reachable through the "Show detailed information" switch. So the output is
-hidden from the default view and from the send total, not from the device. F-19
-explains why the details page is not a reliable backstop: it has the same
-scrolling-container problem.
-
-Both variants rest on the same two amplifications:
-
-1. Wallet ownership is evaluated against the overwritten script
-   ([wallet.py:167-224](../../src/apps/wallets/wallet.py#L167-L224)). Supplying a
-   wallet-owned script and a matching derivation marks the scope as change.
-   `TransactionScreen` then omits unwarned change from the default view and
-   excludes it from the send total.
-2. `OutputScope.write_to` emits these keys only for PSBT v2. Normalizing a v0
-   PSBT silently strips the forged fields.
-
-**Why existing checks do not prevent it**
-
-The first pass over hostile bytes builds the confirmation metadata before
-normalization removes the overrides. The later signing pass therefore cannot
-compare the normalized view against what was displayed. Change and address
-checks operate on the already-overridden scope, not on the global output.
-
-**Recommended fix**
-
-1. Reject output keys `0x03` and `0x04` in a v0 PSBT.
-2. Before confirmation, compare every displayed scope `(value, script_pubkey)`
-   with the exact global transaction output that will be signed.
-3. Make a mismatch fatal instead of silently normalizing it away.
-4. Add end-to-end tests that compare displayed metadata with the signed
-   transaction, including outputs classified as change.
-
----
-
-### ✅ F-02: v2-only PSBT input fields decouple displayed input data from the signed transaction
-
-**Status:** Confirmed at v1.9.0 · **Fixed in the current tree** ·
-**Severity:** High · **Confidence:** High
-
-> **Fix:** same version-consistency check as ✅ F-01, applied to the v2-only
-> input-scope keys `0x0e` (`PSBT_IN_PREVIOUS_TXID`), `0x0f` (`PSBT_IN_OUTPUT_INDEX`),
-> `0x10` (`PSBT_IN_SEQUENCE`), `0x11`, and `0x12`
-> ([psbt.py:171](../../f469-disco/libs/common/embit/src/embit/psbt.py#L171)).
-> All three overrides were replayed against `PSBT.parse` and `PSBTView` and
-> rejected with `PSBTError("PSBTv2 field is not allowed in PSBTv0")`.
-
-- **Impact class:** Value destruction. The victim loses funds, but the excess
-  goes to a miner rather than to the attacker, so the attacker profits only by
-  mining the block or working with a miner. That is why this is High while its
-  output-side sibling ✅ F-01 is Critical. The defect is equally reachable and the
-  fix is shared.
-- **Affected component:** Bitcoin PSBT parsing, display, and legacy signing.
-- **Files and code regions:**
-  [psbt.py:175-181](../../f469-disco/libs/common/embit/src/embit/psbt.py#L175-L181),
-  [psbt.py:262](../../f469-disco/libs/common/embit/src/embit/psbt.py#L262),
-  [psbt.py:279-299](../../f469-disco/libs/common/embit/src/embit/psbt.py#L279-L299),
-  [psbt.py:313-321](../../f469-disco/libs/common/embit/src/embit/psbt.py#L313-L321),
-  [psbt.py:402-407](../../f469-disco/libs/common/embit/src/embit/psbt.py#L402-L407);
-  [psbtview.py:350-354](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L350-L354),
-  [psbtview.py:583-630](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L583-L630);
-  [manager.py:611-621](../../src/apps/wallets/manager.py#L611-L621),
-  [manager.py:648-660](../../src/apps/wallets/manager.py#L648-L660),
-  [manager.py:692-712](../../src/apps/wallets/manager.py#L692-L712),
-  [manager.py:714-762](../../src/apps/wallets/manager.py#L714-L762),
-  [manager.py:766-786](../../src/apps/wallets/manager.py#L766-L786).
-- **Functions and modules:** `InputScope.read_value`, `InputScope.verify`,
-  `PSBTView.sighash_legacy`, wallet-manager PSBT preprocessing.
-- **Attacker capability:** Supply a malicious PSBT over QR, USB, or SD.
-- **Prerequisites:** A v0 PSBT with at least one non-SegWit input, and user
-  approval of the displayed transaction.
-- **Default reachability:** Every Bitcoin `sign` request reaches the affected
-  parser.
-- **Impact on funds:** An arbitrarily large part of the real input can be paid
-  as miner fees while the device shows a small input and fee.
-- **Physical access required:** No.
-- **Malicious host required:** Yes.
-- **Malicious SD/QR/USB input required:** Yes.
-- **Malicious firmware update required:** No.
-- **Prior compromise required:** No.
-- **Deterministic or probabilistic:** Deterministic.
-- **Security property violated:** Displayed inputs and fees must describe the
-  transaction and outpoints actually signed.
-- **Owning codebase:** Vendored `embit` plus this repository's wallet manager.
-
-**Why non-SegWit is required**
-
-For a SegWit input the sighash takes its amount from `inp.utxo.value`, which is
-the *overridden* scope value. A single-session override therefore produces a
-signature committed to the false amount, which is invalid on chain. The attack
-defeats itself there. F-03 is the SegWit-reachable variant of the same economic
-attack, and it needs two signing sessions instead of one.
-
-**Evidence**
-
-`InputScope.read_value` accepts v2-only keys without checking the PSBT version:
-
-```python
-elif k == b"\x0e":
-    self.txid = bytes(reversed(v))
-elif k == b"\x0f":
-    self.vout = int.from_bytes(v, "little")
-elif k == b"\x10":
-    self.sequence = int.from_bytes(v, "little")
-```
-
-In a v0 PSBT the scope starts from the authoritative global unsigned
-transaction. The hostile fields then overwrite scope state:
-
-- `0x0f` selects the `non_witness_utxo` output used as `inp.utxo`, which supplies
-  the displayed input amount and fee.
-- `0x0e` replaces the txid that `verify()` checks the supplied previous
-  transaction against, which makes that check self-referential.
-- `0x10` replaces the scope sequence. v1.9.0 never displays input sequences, so
-  the global sequence being signed stays hidden rather than being shown wrongly.
-
-The legacy sighash takes outpoints and sequences from the global transaction and
-does not commit to the input amount.
-
-These three keys are the **only** ones in `InputScope.read_value` with no
-version guard. Every neighbouring branch also does a key-length check and a
-duplicate check. Compare `psbt.py:339-344`:
-
-```python
-elif k[0] == 0x08:
-    if len(k) != 1: raise PSBTError("Invalid final scriptwitness key")
-    elif self.final_scriptwitness is None: ...
-    else: raise PSBTError("Duplicated final scriptwitness")
-```
-
-The `0x0e`, `0x0f`, and `0x10` branches have neither. They also have **no
-value-length check**: `int.from_bytes(v, "little")` accepts a value of any
-length, so `vout` and `sequence` can be arbitrarily large integers, and a huge
-`vout` indexes `non_witness_utxo.vout[...]`. And they have **no duplicate
-check**: two `0x0f` records are both accepted and the **last one wins**. That is
-an extra parser difference against any implementation that takes the first
-occurrence or rejects duplicates.
-
-`psbt.py:122-128` confirms these fields are pre-populated from the global
-unsigned transaction's `vin`, so the keys really do overwrite authoritative
-state. `psbt.py:237` (`if self.txid == txid:`) confirms `verify()` compares
-against the attacker-overridable `self.txid`.
-
-**Attack trace**
-
-A targeted parser proof produced:
-
-```text
-HONEST    verify=True displayed_in=1000000000 displayed_fee=999910000
-0x0f EVIL verify=True displayed_in=100000    displayed_fee=10000
-sighash in both cases: byte-identical
-real fee paid by the evil variant: 999910000 sat
-```
-
-The `0x0f` variant can select a small output from the genuine previous
-transaction and needs no fabricated previous transaction. The `0x0e` variant
-also produced:
-
-```text
-no override        -> rejected: previous txid does not match
-with 0x0e override -> verify()=True; displayed small input; signed real outpoint
-```
-
-An `0x10` override set the scope to `0xfffffffd` while the global transaction
-signed `0xffffffff`. That shows a parser/global-transaction divergence, but it is
-not a separate display attack in v1.9.0 because neither value is shown.
-
-**Why existing checks do not prevent it**
-
-Verification uses attacker-overridden scope state, while the legacy signature
-uses the authoritative global outpoint and does not bind the amount. So the
-transaction-hash check validates attacker-selected scope state, not the outpoint
-that is signed.
-
-**Recommended fix**
-
-1. Reject `0x0e`, `0x0f`, `0x10`, and every other v2-only key whenever a v0
-   global unsigned transaction exists. Add the missing key-length, value-length,
-   and duplicate checks at the same time.
-2. Before display, assert that every scope txid, vout, and sequence equals the
-   matching global transaction input.
-3. Require verified previous-transaction state for every legacy input.
-4. Add regression tests for field ordering and for both compressed and
-   uncompressed parsing.
+why existing checks do not stop it, and a recommended fix with a concrete action
+plan.
 
 ---
 
@@ -917,7 +761,7 @@ that is signed.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** Every input amount that contributes to the
   displayed fee must be authenticated before signing.
-- **Owning codebase:** This repository and vendored `embit`.
+- **Owning codebase:** This repository and `embit`.
 
 **Evidence**
 
@@ -948,7 +792,7 @@ Two things make this easier than a first reading suggests:
 - The per-input values that would expose the lie are drawn **only on the details
   page** of `TransactionScreen`, and that page is hidden by default unless a
   custom sighash, an unknown Liquid value, or an issuance is present
-  ([transaction.py:19-30](../../src/gui/screens/transaction.py#L19-L30)). A user
+  ([transaction.py:16-27](../../src/gui/screens/transaction.py#L16-L27)). A user
   following the default flow never sees the amount that was lied about.
 - There is **no compensating fee control at all** — no absolute threshold, no
   sat/vB rate, no percentage warning — and `meta["warnings"]` is never populated
@@ -959,11 +803,51 @@ Two things make this easier than a first reading suggests:
 Committing to the amount of the currently signed input does not authenticate the
 other inputs whose false amounts drive the fee display.
 
+**Code at this tree**
+
+[manager.py:654](../../src/apps/wallets/manager.py#L654):
+
+```python
+# verify, do not require non_witness_utxo if witness_utxo is set
+inp.verify(ignore_missing=True)
+```
+
+The return value is discarded. `grep -rn "is_verified" src/` returns **zero**
+hits, so the `embit` API built for exactly this purpose is never consulted, even
+though `InputScope.verify` sets `self._verified` at
+[psbt.py:297-299](../../f469-disco/libs/common/embit/src/embit/psbt.py#L297-L299).
+The Liquid manager makes the identical call at
+[liquid/manager.py:294](../../src/apps/wallets/liquid/manager.py#L294).
+Per-input values are drawn only on `page2`
+([transaction.py:87-112](../../src/gui/screens/transaction.py#L87-L112)), and
+`meta["warnings"]` is never populated on the Bitcoin path.
+
 **Recommended fix**
 
 Treat `verify()` returning `False` as fatal. If support for unverified amounts
 must stay, show an unavoidable per-input warning and never present a computed
 fee as verified. Add the F-24 fee sanity check as defense in depth.
+
+**Action plan**
+
+1. In [manager.py:648-699](../../src/apps/wallets/manager.py#L648-L699), capture
+   and act on the result:
+
+   ```python
+   verified = inp.verify(ignore_missing=True)
+   if not verified:
+       metainp["warning"] = "Input amount is NOT verified - previous transaction missing!"
+       meta.setdefault("warnings", []).append(
+           "Input %d amount is unverified. The displayed fee may be wrong." % i
+       )
+       unverified_inputs += 1
+   ```
+2. Set `meta["fee_verified"] = (unverified_inputs == 0)` and have
+   [transaction.py:68-79](../../src/gui/screens/transaction.py#L68-L79) render
+   `Fee: ~N satoshi (UNVERIFIED)` in `style_warning` when it is False.
+3. Preferred, if no wallet depends on unverified amounts: make it fatal —
+   `raise WalletError("Missing non_witness_utxo for input %d" % i)`.
+4. Add the F-24 fee sanity check as the compensating control.
 
 ---
 
@@ -1001,7 +885,7 @@ else the target key signs.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** A derived private key must sign only when its
   public key is authorized by the input script or by an explicit wallet policy.
-- **Owning codebase:** Vendored `embit` plus this repository.
+- **Owning codebase:** `embit` plus this repository.
 
 **Evidence**
 
@@ -1064,12 +948,66 @@ authorization by the input script. F-05 supplies the xpub that makes the
 derivation records constructible, and F-19 governs whether the surrounding
 warnings are on screen at all.
 
+**Code at this tree**
+
+[psbtview.py:857-867](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L857-L867):
+
+```python
+# check if root is included in the script
+if sec in sc.data or pkh in sc.data:
+    sig = root.sign(h)
+    inp.partial_sigs[rootpub] = sig.serialize() + bytes([inp_sighash])
+    counter += 1
+for prv, pub in derived_keypairs:          # <-- no equivalent test
+    sig = prv.sign(h)
+    inp.partial_sigs[pub] = sig.serialize() + bytes([inp_sighash])
+    counter += 1
+```
+
+`derived_keypairs` is an `OrderedDict` for determinism, which does not
+constrain membership. The x-only comparison is at
+[psbtview.py:820-821](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L820-L821).
+[ram.py:77-78](../../src/keystore/ram.py#L77-L78) passes `self.root`, and
+[manager.py:786](../../src/apps/wallets/manager.py#L786) calls
+`self.keystore.sign_input(...)` for every input regardless of whether a wallet
+resolved.
+
 **Recommended fix**
 
 Apply the same public-key or public-key-hash membership test to every derived
 key. Do not call keystore signing for an input unless a known wallet or an
 explicitly supported standalone script policy resolved. Compare full SEC keys,
 not x-only keys, outside Taproot.
+
+**Action plan**
+
+1. In `PSBTView.sign_input`, gate the derived loop the same way as the root:
+
+   ```python
+   for prv, pub in derived_keypairs:
+       psec = pub.sec()
+       ppkh = hashes.hash160(psec)
+       if psec not in sc.data and ppkh not in sc.data:
+           continue
+       sig = prv.sign(h)
+       inp.partial_sigs[pub] = sig.serialize() + bytes([inp_sighash])
+       counter += 1
+   ```
+2. Replace the x-only comparison with a full SEC comparison outside Taproot:
+
+   ```python
+   if inp.is_taproot:
+       ok = hdkey.xonly() == pub.xonly()
+   else:
+       ok = hdkey.sec() == pub.sec()
+   if not ok:
+       raise PSBTError("Derivation path doesn't look right")
+   ```
+3. In [manager.py:779-786](../../src/apps/wallets/manager.py#L779-L786), skip
+   `keystore.sign_input` when no wallet resolved for that input, rather than
+   relying on the generic "Unknown wallet in inputs!" prompt.
+4. This is an upstream `embit` defect reproduced verbatim. Route items 1 and 2
+   through coordinated disclosure to the `embit` maintainers; item 3 is ours.
 
 ---
 
@@ -1118,10 +1056,10 @@ conditional on internal-flash read access.
   and write access.
 - The bootloader configuration uses RDP1 rather than RDP2.
 
-`docs/security.md:17` correctly says that flash-mode decryption uses both the
-PIN and the device secret. It omits that the verifier, the device secret, the
-attempt counter, and the encrypted mnemonic all share the same readable-flash
-trust domain. That omission is recorded in the Section 8 differential.
+`docs/security-info.md` states the correct version of this twice and an
+incorrect version once, claiming that the HMAC prevents offline brute force from
+flash contents. It does not, because the key to that HMAC is itself flash
+contents. See DOC-01.
 
 Authenticated QSPI wallet and settings blobs hold no monotonic counter. An
 attacker with QSPI access can replay a valid older blob and suppress gap-limit
@@ -1140,11 +1078,52 @@ blob.
 The attempt counter shares the readable-flash trust domain, and the PIN
 derivation is not memory-hard.
 
+**Code at this tree**
+
+[flash.py:126-128](../../src/keystore/flash.py#L126-L128):
+
+```python
+key = tagged_hash("pin", self.secret)
+pin_hmac = hmac.new(key=key, msg=pin.encode(), digestmod="sha256").digest()
+```
+
+[flash.py:139](../../src/keystore/flash.py#L139) derives
+`pin_secret = tagged_hash("pin", self.secret + pin.encode())`. The device secret
+is read in cleartext from `/flash/keystore/secret` at
+[ram.py:130-138](../../src/keystore/ram.py#L130-L138). There is no memory-hard
+KDF and no minimum PIN length, and RDP2 is compiled out in the bootloader —
+see F-08.
+
 **Recommended fix**
 
 Use a memory-hard PIN KDF. Enforce a minimum PIN length. Bind rollback-sensitive
 state to a protected monotonic value where the hardware allows it. Provide a
 production configuration with stronger hardware-backed readout protection.
+
+**Action plan**
+
+1. Replace the single HMAC with a memory-hard KDF. MicroPython on this board has
+   no scrypt/argon2, so the practical option is a PBKDF2-SHA256 wrapper with a
+   high, tuned iteration count plus a stored per-device salt:
+
+   ```python
+   # flash.py
+   PIN_KDF_ITERS = 200_000   # tune against the F469 budget, target ~1s
+   def _pin_kdf(self, pin: str) -> bytes:
+       return hashlib.pbkdf2_hmac("sha256", pin.encode(),
+                                  tagged_hash("pin-salt", self.secret),
+                                  self.PIN_KDF_ITERS, 32)
+   ```
+
+   Use it for both `self.pin` (verifier) and `self.pin_secret`. Version the
+   on-flash record so existing devices migrate on next successful unlock.
+2. Enforce a minimum PIN length in
+   [input.py:208-300](../../src/gui/screens/input.py#L208-L300) — the PIN screen
+   currently imposes none.
+3. Keep the RDP1 limitation documented next to the storage guarantees in
+   [docs/security-info.md](../../docs/security-info.md). It already covers this
+   at [security-info.md:139-148](../../docs/security-info.md#L139-L148), but a
+   later bullet in the same document contradicts it — see DOC-01.
 
 ---
 
@@ -1245,6 +1224,26 @@ matters: the residual defense above rests on the assumption that what the screen
 shows is what gets signed, and F-21 shows that assumption does not hold in
 general on this screen.
 
+**Code at this tree**
+
+[bl_signature.c:148-149](../../bootloader/core/bl_signature.c#L148-L149):
+
+```c
+sha256_Update(&context, (const uint8_t*)BITCOIN_SIG_PREFIX,
+              sizeof(BITCOIN_SIG_PREFIX) - 1U);
+```
+
+[signmessage.py:93-97](../../src/apps/signmessage/signmessage.py#L93-L97):
+
+```python
+msghash = sha256(sha256(
+    b"\x18Bitcoin Signed Message:\n" + compact.to_bytes(len(msg)) + msg
+).digest()).digest()
+```
+
+Same prefix, same length encoding, same double SHA-256, no domain separator on
+either side. The message app accepts any derivation path with no allowlist.
+
 **Recommended fix**
 
 1. Give firmware authorization its own tagged hash or prefix, so a signature
@@ -1255,6 +1254,24 @@ general on this screen.
    message app refuses.
 3. Have the message app recognize the bootloader `hrp` grammar and show an
    explicit "this authorizes a firmware release" screen.
+
+**Action plan**
+
+1. **Real fix (coordinated bootloader + firmware change):** give firmware
+   authorization its own prefix in `bl_signature.c`, e.g.
+   `#define SPECTER_FW_SIG_PREFIX ("\x1eSpecter Firmware Authorization:\n")`, and
+   bump the upgrade-file format version so old bootloaders reject new files and
+   vice versa. Update
+   [bootloader/tools/upgrade-generator.py](../../bootloader/tools/upgrade-generator.py)
+   `message` output at the same time.
+2. **Interim, no firmware change required:** in
+   [signmessage.py](../../src/apps/signmessage/signmessage.py), refuse to sign
+   any message whose Bech32 HRP matches the bootloader grammar
+   (`^b\d+\.\d+\.\d+`), or refuse paths under the release-key branch. Document
+   the release-key derivation path and constrain it.
+3. Have the message app detect the bootloader `hrp` grammar and show an explicit
+   "This authorizes a FIRMWARE RELEASE" screen rather than the generic message
+   prompt.
 
 ---
 
@@ -1284,9 +1301,8 @@ confirmed on device.
 - **Default reachability:** QR and SD by default. USB after the user enables it.
 - **Impact on funds:** The user's key signs text they were never shown. Direct
   fund loss depends on what the signature is used for, but this is a
-  display/signing divergence on a signing primitive, the same class as ✅ F-01 and
-  ✅ F-02. Those two are fixed; F-21 is not, so this is the class's remaining
-  instance on the message-signing prompt.
+  display/signing divergence on a signing primitive, and F-17 makes that
+  primitive a firmware-authorization primitive as well.
 - **Physical access required:** No.
 - **Malicious host required:** Yes.
 - **Malicious SD/QR/USB input required:** Yes.
@@ -1362,6 +1378,32 @@ The only content check is a decode that does not check what its own argument
 says it checks. There is no length cap, no control-character filter, and no NUL
 rejection anywhere on this path.
 
+**Code at this tree**
+
+[signmessage.py:59-68](../../src/apps/signmessage/signmessage.py#L59-L68):
+
+```python
+try:
+    msg = "Message:\n\n"
+    msg += "__________________________________\n"
+    msg += message.decode("ascii")
+    msg += "\n__________________________________"
+except:
+    msg = "Hex message:\n\n%s" % hexlify(message).decode()
+```
+
+No NUL rejection, no control-character filter, no length cap. `base64:` decoding
+at [signmessage.py:57](../../src/apps/signmessage/signmessage.py#L57) is
+unbounded. In the pinned MicroPython fork, `objstr.c` discards the encoding
+argument to `.decode()` and `unicode.c`'s `utf8_check()` accepts NUL, which is
+why the `.decode("ascii")` guard does not reject non-ASCII input. The derivation
+path is unbounded
+([signmessage.py:43-51](../../src/apps/signmessage/signmessage.py#L43-L51)), the
+signature is recoverable
+([ram.py:83-88](../../src/keystore/ram.py#L83-L88)), and the address mapping
+falls through to p2pkh for `m/86h`
+([signmessage.py:78-83](../../src/apps/signmessage/signmessage.py#L78-L83)).
+
 **Recommended fix**
 
 Reject any byte outside printable ASCII plus `\n`, or show hex unconditionally
@@ -1369,6 +1411,32 @@ for anything else. Cap the message length. Require the user to scroll to the end
 before Confirm becomes pressable. Bound the derivation path, or at least warn
 when it lies outside the paths of any wallet the device knows. Fix the
 address-type mapping, or omit the address.
+
+**Action plan**
+
+1. Validate bytes explicitly instead of relying on `.decode("ascii")`:
+
+   ```python
+   MAX_MSG_LEN = 512
+   if len(message) > MAX_MSG_LEN:
+       raise AppError("Message too long (%d > %d bytes)" % (len(message), MAX_MSG_LEN))
+   printable = all(0x20 <= b <= 0x7E or b == 0x0A for b in message)
+   if printable:
+       msg = "Message:\n\n__________________________________\n" \
+             + message.decode() + "\n__________________________________"
+   else:
+       msg = "Hex message:\n\n%s" % hexlify(message).decode()
+   ```
+
+   This closes the NUL truncation, the U+202E and homoglyph variants, and the
+   forged `__________` separator in one change.
+2. Move the frame lines out of the message label into their own labels so they
+   cannot be forged.
+3. Bound the derivation path (see H-15 item 3) and warn when it lies outside any
+   known wallet's paths.
+4. Fix the address mapping: add `86h → p2tr`, or drop the address line for
+   unrecognized purposes rather than showing a misleading p2pkh address.
+5. Gate Confirm on scroll-to-end — see F-19.
 
 ---
 
@@ -1454,12 +1522,45 @@ whether to prompt. The residual mitigation is that loading the key from the card
 is still a manual menu action ("Load key from smartcard"). That is a UI step, not
 a cryptographic control.
 
+**Code at this tree**
+
+[secureapplet.py:48-51](../../src/keystore/javacard/applets/secureapplet.py#L48-L51)
+takes the whole PIN policy from a card response:
+
+```python
+def get_pin_status(self):
+    status = self.sc.request(self.PIN_STATUS)
+    (self._pin_attempts_left, self._pin_attempts_max, self._pin_status) = list(status)
+```
+
+[secureapplet.py:77-80](../../src/keystore/javacard/applets/secureapplet.py#L77-L80)
+derives `is_locked` from `self._pin_status`,
+[secureapplet.py:105-106](../../src/keystore/javacard/applets/secureapplet.py#L105-L106)
+short-circuits `unlock()` on it, and
+[memorycard.py:101-102](../../src/keystore/memorycard.py#L101-L102) forwards it
+straight through into `RAMKeyStore.unlock`'s `while self.is_locked` loop. No
+device-side PIN-attempt counter exists anywhere in `src/keystore/`.
+
 **Recommended fix**
 
 Pin the card identity, as F-07 recommends. Keep a device-side monotonic
 PIN-attempt counter in flash as a cross-check. Always require PIN entry at boot,
 whatever the card claims. Do not accept a constant-key blob from a card that was
 not previously paired.
+
+**Action plan**
+
+1. Always prompt for a PIN at boot when a smartcard keystore is selected,
+   regardless of what the card reports. In `RAMKeyStore.unlock`, replace
+   `while self.is_locked` with a first-iteration-unconditional loop for
+   card-backed keystores.
+2. Add a device-side monotonic PIN-attempt counter in `/flash/keystore/` and
+   cross-check it against `_pin_attempts_left`; treat a disagreement as a
+   card-swap and hard-fail.
+3. Pin the card public key at pairing — see F-07, which is the prerequisite for
+   this being meaningful.
+4. Require confirmation of the resulting wallet fingerprint after each "Load key
+   from smartcard".
 
 ---
 
@@ -1552,12 +1653,65 @@ The existing guard validates only the scratch offset. The Python caller does not
 bound the CompactSize value. MicroPython reports EOF from `mp_stream_rw` with
 `errcode = 0`, so the native `if (err)` escape does not stop the loop.
 
+**Code at this tree**
+
+[libsecp256k1.c:1818-1839](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1818-L1839):
+
+```c
+size_t prooflen = (size_t)get_uint64(args[1]);
+intptr_t memptr = (intptr_t)get_uint64(args[2]);
+intptr_t memlen = (intptr_t)get_uint64(args[3]);
+intptr_t memoff = (prooflen / 4 + 1)*4;
+size_t l = 0;
+if(memlen < memoff){ mp_raise_ValueError("Not enough memory for proof."); }
+int err = 0;
+while(l < (prooflen - 64)){                       // unsigned underflow for prooflen < 64
+    mp_stream_read_exactly(stream, (byte*)(memptr+l), 64, &err);
+    if(err){ mp_raise_ValueError("Failed to read from stream"); }
+    l += 64;
+}
+```
+
+The Python caller at
+[liquid/wallet.py:65-80](../../src/apps/wallets/liquid/wallet.py#L65-L80) reads
+the CompactSize straight from the PSET stream and passes it with no minimum and
+no arena bound.
+
 **Recommended fix**
 
 Enforce both a protocol minimum and the real arena maximum before crossing the
 native boundary. Use addition-based bounds that are checked for overflow. Treat
 a short stream read as failure regardless of `errcode`. Validate the rangeproof
 length in `fill_pset_scope`.
+
+**Action plan**
+
+1. Native, in `usecp256k1_rangeproof_rewind_from`:
+
+   ```c
+   if(prooflen < 65 || prooflen > (size_t)memlen){
+       mp_raise_ValueError("Invalid proof length");
+       return mp_const_none;
+   }
+   while(l + 64 <= prooflen){                     /* addition-based, no underflow */
+       size_t got = mp_stream_read_exactly(stream, (byte*)(memptr+l), 64, &err);
+       if(err || got != 64){ mp_raise_ValueError("Failed to read from stream"); }
+       l += 64;
+   }
+   ```
+
+   Treat a short read as failure regardless of `errcode` — `mp_stream_rw`
+   reports EOF with `errcode == 0`
+   ([stream.c:59-68](../../f469-disco/micropython/py/stream.c#L59-L68)).
+2. Python, in `LWallet.fill_pset_scope`, validate before crossing the boundary:
+
+   ```python
+   l = compact.read_from(stream)
+   if l < 65 or l > memlen:
+       raise RewindError("Invalid rangeproof length %d" % l)
+   ```
+3. Fix the ABI mismatch in the same module **first** — see H-16 — or the arena
+   bound the native check relies on is itself garbage.
 
 ---
 
@@ -1646,6 +1800,22 @@ Application host gating happens later and controls only `USBHost`. The
 MicroPython port has already exposed CDC and MSC. `platform.enable_usb` does not
 clear dupterm, and the safer `set_usb_mode` helper has no callers.
 
+**Code at this tree**
+
+In [boot/main/boot.py](../../boot/main/boot.py) the ordering is power hold
+(lines 13-14) → I2C init and battery-gauge write (lines 19-23) → LEDs →
+`pyb.ExtInt(...)` (line 49) → and only then, at lines 57-59:
+
+```python
+pyb.usb_mode(None)
+os.dupterm(None,0)
+os.dupterm(None,1)
+```
+
+The inert `sys.path` cleanup at lines 7-10 is the subject of F-15. In the
+pinned MicroPython fork, `flash_error(4)` returns rather than halting, the USB
+fault default is `USBD_MODE_CDC_MSC`, and the MSC partition map is read-write.
+
 **Recommended fix**
 
 Disable USB and both dupterm slots in the first lines of `boot.py`. Establish
@@ -1653,6 +1823,35 @@ USB-off and terminal-detached state before any I2C, display, pin, interrupt, or
 filesystem work. Make peripheral setup fail closed. Enforce terminal detachment
 inside the function that enables USB. Do not rely on later application host state
 to secure a port-owned USB device.
+
+**Action plan**
+
+1. Move the three USB-off lines to the very top of `boot.py`, above the power
+   hold:
+
+   ```python
+   # boot.py -- first three statements, before anything fallible
+   import pyb, os
+   pyb.usb_mode(None)
+   os.dupterm(None, 0)
+   os.dupterm(None, 1)
+   ```
+2. Wrap the fallible peripheral setup (I2C, ExtInt) so a raise cannot leave the
+   device in a less-secure state than it started:
+
+   ```python
+   try:
+       i2c = pyb.I2C(1); i2c.init()
+       if 112 in i2c.scan():
+           i2c.mem_write(0b00010000, 112, 0)
+   except Exception:
+       i2c = None          # continue with USB already off
+   ```
+3. Make `platform.enable_usb` clear both dupterm slots itself, so no caller can
+   enable USB and leave the REPL attached.
+4. Longer term: patch the fork so `flash_error()` halts instead of returning for
+   the frozen-`boot.py` failure case.
+
 ---
 
 ### F-05: USB exports arbitrary-path xpubs and the fingerprint without confirmation
@@ -1703,12 +1902,56 @@ result with no confirmation screen.
 The only gate is session unlock. The host-request handler has no per-export
 authorization.
 
+**Code at this tree**
+
+In [xpubs.py:257-277](../../src/apps/xpubs/xpubs.py#L257-L277), `show_screen` is
+a parameter and is never called:
+
+```python
+async def process_host_command(self, stream, show_screen):
+    if self.keystore.is_locked:
+        raise AppError("Device is locked")
+    prefix = self.get_prefix(stream)
+    if prefix == b"fingerprint":
+        return BytesIO(hexlify(self.keystore.fingerprint)), {}
+    elif prefix == b"xpub":
+        ...
+        xpub = self.keystore.get_xpub(bip32.path_to_str(path))
+        return BytesIO(xpub.to_base58(NETWORKS[self.network]["xpub"]).encode()), {}
+```
+
+`LIST_WALLETS` at
+[manager.py:238-240](../../src/apps/wallets/manager.py#L238-L240) is likewise
+unconfirmed.
+
 **Recommended fix**
 
 Route host-requested xpub and fingerprint exports through the existing xpub
 confirmation flow, and show the requested derivation and the resulting
 fingerprint. Consider whether wallet-name enumeration also needs a prompt or an
 interface-level opt-in.
+
+**Action plan**
+
+1. Route both exports through a prompt, reusing the existing confirmation style:
+
+   ```python
+   elif prefix == b"xpub":
+       path = bip32.parse_path(stream.read().strip().decode())
+       xpub = self.keystore.get_xpub(bip32.path_to_str(path))
+       if not await show_screen(Prompt(
+               "Export public key?",
+               "Path: %s\n\nFingerprint: %s" % (
+                   bip32.path_to_str(path),
+                   hexlify(self.keystore.fingerprint).decode()))):
+           return
+       return BytesIO(xpub.to_base58(NETWORKS[self.network]["xpub"]).encode()), {}
+   ```
+2. Same for `fingerprint`.
+3. Decide explicitly whether `LIST_WALLETS` needs a prompt or an interface-level
+   opt-in; it currently enumerates wallet names to any host.
+4. Bound the path depth here too — this handler is the reachable entry point for
+   H-15 item 3.
 
 ---
 
@@ -1800,12 +2043,54 @@ with no authentication**. `_set_pin`
 fresh random key, permanently destroying any seed the user had stored on flash or
 SD. See H-14.
 
+**Code at this tree**
+
+[securechannel.py:52-58](../../src/keystore/javacard/applets/securechannel.py#L52-L58)
+fetches `card_pubkey` from the card and never pins it;
+[securechannel.py:201](../../src/keystore/javacard/applets/securechannel.py#L201)
+discards it on close. The public-constant blob format is at
+[memorycard.py:171](../../src/keystore/memorycard.py#L171) and
+[memorycard.py:185](../../src/keystore/memorycard.py#L185):
+
+```python
+res = aead_encrypt(b"\xcc"*32, self.MAGIC + fingerprint, r)
+...
+key = b"\xcc"*32
+```
+
+The anti-phishing words come only from `PinScreen`, and whether a PIN screen is
+drawn at all is decided by the card (F-22). The destructive no-PIN fallback is
+at [flash.py:173-186](../../src/keystore/flash.py#L173-L186) (H-14).
+
 **Recommended fix**
 
 Pin the card public key at pairing and hard-fail on mismatch. Always require PIN
 entry at boot, whatever state the card claims. Require confirmation of the
 resulting wallet fingerprint after each card load. Remove the public-constant
 blob format, or put it behind an explicit per-load integrity warning.
+
+**Action plan**
+
+1. Pin the card key at first pairing, stored AEAD-encrypted under the device
+   secret:
+
+   ```python
+   # memorycard.py
+   def _check_card_identity(self):
+       sec = secp256k1.ec_pubkey_serialize(self.applet.card_pubkey)
+       known = self._load_paired_card_pubkey()      # from /flash/keystore/card_pub
+       if known is None:
+           self._save_paired_card_pubkey(sec)       # TOFU, but recorded
+       elif known != sec:
+           raise KeyStoreError("Smartcard identity changed! Card may have been swapped.")
+   ```
+
+   Call it from `MemoryCard.init` before any PIN decision.
+2. Remove the `b"\xcc"*32` blob format, or gate it behind a per-load "this seed
+   is unauthenticated" prompt.
+3. Always require PIN entry at boot (F-22), so the anti-phishing words are
+   always shown.
+4. Confirm the resulting wallet fingerprint after each card load.
 
 ---
 
@@ -1933,6 +2218,34 @@ Build provenance has no artifact-verifiable key-set record.
 The key guard fails closed but does not record key identity, and RDP1 is
 intentionally weaker than irreversible RDP2.
 
+**Code at this tree**
+
+[bootloader/Makefile:20](../../bootloader/Makefile#L20) has
+`KEYS ?= selfsigned`, and
+[build_firmware.sh:21](../../build_firmware.sh#L21) calls
+`make stm32f469disco READ_PROTECTION=1 WRITE_PROTECTION=1` without
+`KEYS=production`. The fail-closed guard at
+[bootloader/Makefile:35](../../bootloader/Makefile#L35) is intact. RDP2 is
+compiled out at
+[bl_syscalls.c:750-753](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L750-L753):
+
+```c
+// RDP Level 2 is intentionally disabled. If misused may brick your board!
+```
+
+`vendor_pubkey_list` and `maintainer_pubkey_list` in
+[bootloader/keys/production/pubkeys.c](../../bootloader/keys/production/pubkeys.c)
+are **byte-identical** — the same four keys (k9ert, Mike, Stepan, Backup m/99h)
+in the same order, with `bootloader_sig_threshold = 2` and
+`main_fw_sig_threshold = 2`. The nominal vendor/maintainer role separation
+therefore gives no defense in depth.
+
+Partial mitigation, not a fix:
+[tools/introspect-binary.py](../../bootloader/tools/introspect-binary.py) and
+[tools/parse_pubkeys.py](../../bootloader/tools/parse_pubkeys.py) can verify a
+signed binary against a `pubkeys.c`. These read the **source** file, so they do
+not let a finished artifact carry evidence of its own trust root.
+
 **Recommended fix**
 
 Select the production key directory through `KEYS=production` for release
@@ -1941,6 +2254,23 @@ fingerprints in build metadata, so a finished artifact carries evidence of its
 own trust root. Separate the vendor and maintainer key sets so the two roles mean
 something. Keep the RDP1 limitation documented next to the storage guarantees.
 
+**Action plan**
+
+1. `build_firmware.sh`: pass `KEYS=production` explicitly instead of relying on
+   a manual `cp` into a directory named `selfsigned`.
+2. Record the key set in the artifact. Emit a `keyset.txt` next to the release
+   binaries containing the SHA-256 fingerprint of each compiled-in key —
+   `parse_pubkeys.get_pubkey_info` already computes exactly this, so wiring it
+   into `build_firmware.sh` is a few lines.
+3. Make the vendor and maintainer lists genuinely distinct, so 2-of-4 on
+   firmware is not the same 2-of-4 as on the bootloader.
+4. Tighten the bound at
+   [bootloader.c:247-248](../../bootloader/core/bootloader.c#L247-L248) to count
+   *distinct* keys rather than key slots.
+5. Document the RDP1 limitation next to the storage guarantees. RDP2 being
+   irreversible is a legitimate reason not to enable it by default, but it
+   should be stated where F-06's threat model is described.
+
 ---
 
 ### F-10: `non_witness_utxo` parsing is not bounded to its declared field length
@@ -1948,7 +2278,7 @@ something. Keep the RDP1 limitation documented next to the storage guarantees.
 **Status:** Plausible · **Severity:** Medium · **Confidence:** High for the
 desynchronization; Medium for the security impact.
 
-- **Affected component:** Vendored `embit` input-scope parsing and PSBT
+- **Affected component:** `embit` input-scope parsing and PSBT
   normalization.
 - **Files and code regions:**
   [psbt.py:153-165](../../f469-disco/libs/common/embit/src/embit/psbt.py#L153-L165),
@@ -1975,7 +2305,7 @@ desynchronization; Medium for the security impact.
 - **Deterministic or probabilistic:** Deterministic parser difference.
 - **Security property violated:** Every parsing and normalization pass must
   enforce identical field boundaries and canonical scope contents.
-- **Owning codebase:** Vendored `embit`.
+- **Owning codebase:** `embit`.
 
 **Evidence**
 
@@ -2006,11 +2336,62 @@ but the length-honoring scan does not.
 No bounded substream and no exact-consumption check ties embedded transaction
 parsing to the PSBT field boundary.
 
+**Code at this tree**
+
+[psbt.py:307-322](../../f469-disco/libs/common/embit/src/embit/psbt.py#L307-L322):
+
+```python
+if k[0] == 0x00:
+    if len(k) != 1:
+        raise PSBTError("Invalid non-witness utxo key")
+    elif self.non_witness_utxo is not None:
+        raise PSBTError("Duplicated utxo value")
+    else:
+        l = compact.read_from(stream)        # <-- read, then never used
+        if self.compress and self.txid and self.vout is not None:
+            txout, txhash = self.TX_CLS.read_vout(stream, self.vout)
+            ...
+        else:
+            tx = self.TX_CLS.read_from(stream)
+    return
+```
+
+`l` is discarded. The embedded transaction is parsed directly from the parent
+stream, so no bounded substream and no exact-consumption check tie it to the
+declared field boundary. Independent `PSBTView` scanners do honor the declared
+length, which is what makes the two views disagree.
+
 **Recommended fix**
 
 Parse through a length-bounded stream and require exact consumption of the
 declared field value. Add differential tests that require all parser and scanner
 passes to produce the same scope boundaries and key set.
+
+**Action plan**
+
+1. Parse through a bounded reader and require exact consumption:
+
+   ```python
+   l = compact.read_from(stream)
+   start = stream.tell()
+   if self.compress and self.txid and self.vout is not None:
+       txout, txhash = self.TX_CLS.read_vout(stream, self.vout)
+       self._txhash, self._utxo = txhash, txout
+   else:
+       self.non_witness_utxo = self.TX_CLS.read_from(stream)
+   consumed = stream.tell() - start
+   if consumed != l:
+       raise PSBTError("non_witness_utxo length mismatch: declared %d, consumed %d"
+                       % (l, consumed))
+   ```
+
+   `read_vout` may legitimately stop early; in that case seek to `start + l` and
+   verify the seek lands inside the scope rather than requiring exact
+   consumption for that branch.
+2. Add a differential test asserting `InputScope` and the length-honoring
+   `PSBTView` scanner see the same key set over identical bytes.
+3. This is an upstream `embit` defect. Route it through coordinated disclosure
+   together with F-04 (§12.2).
 
 ---
 
@@ -2044,7 +2425,7 @@ passes to produce the same scope boundaries and key set.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** Displayed Liquid amounts and assets must be
   verified against the confidential commitments being signed.
-- **Owning codebase:** This repository and vendored `embit`.
+- **Owning codebase:** This repository and `embit`.
 
 **Evidence**
 
@@ -2070,11 +2451,48 @@ Output commitments are verified, but that does not authenticate input cleartext
 metadata. Previous-transaction verification proves transaction identity, not the
 relationship between claimed values or blinders and the commitments.
 
+**Code at this tree**
+
+At [liquid/wallet.py:62-64](../../src/apps/wallets/liquid/wallet.py#L62-L64) the
+comment describes a verification that does not happen:
+
+```python
+if None not in [scope.asset, scope.value, scope.asset_blinding_factor, scope.value_blinding_factor]:
+    # verify that asset and value blinding factors lead to value and asset commitments
+    return True
+```
+
+`grep -rn "unblind" src/` finds no call site for `LInputScope.unblind` in the
+PSET signing flow. Display metadata uses the host-supplied values directly at
+[liquid/manager.py:375-380](../../src/apps/wallets/liquid/manager.py#L375-L380).
+
 **Recommended fix**
 
 Recompute and compare the asset generator and the Pedersen commitment from the
 supplied asset, value, and blinders. Treat missing or mismatching values as
 unknown and unblinded, and do not compute a trusted input summary from them.
+
+**Action plan**
+
+1. Implement the check the comment promises, before the early return:
+
+   ```python
+   if None not in [scope.asset, scope.value, scope.asset_blinding_factor,
+                   scope.value_blinding_factor]:
+       gen = secp256k1.generator_generate_blinded(scope.asset, scope.asset_blinding_factor)
+       if secp256k1.generator_serialize(gen) != vout.asset:
+           raise WalletError("Asset commitment does not match claimed asset")
+       commit = secp256k1.pedersen_commit(scope.value_blinding_factor, scope.value, gen)
+       if secp256k1.pedersen_commitment_serialize(commit) != vout.value:
+           raise WalletError("Value commitment does not match claimed value")
+       return True
+   ```
+2. If the check cannot be performed (missing blinders), set `scope.value = -1`
+   so the screen renders `???` — `TransactionScreen` already handles that
+   sentinel at
+   [transaction.py:98](../../src/gui/screens/transaction.py#L98) — and exclude
+   the input from any computed total.
+3. Do not compute or display a fee when any input amount is unverified.
 
 ---
 
@@ -2169,6 +2587,31 @@ QSPI user-file HMAC helpers are bypassed by the language import machinery. The
 empty `sys.path` entry also resolves against QSPI. Secure boot authenticates
 internal firmware, not external modules.
 
+**Code at this tree**
+
+[boot.py:7-10](../../boot/main/boot.py#L7-L10) is inert:
+
+```python
+for p in sys.path:
+    if "qspi" in sys.path:     # tests for the exact element "qspi", never present
+        sys.path.remove(p)
+```
+
+[platform.py:9-12](../../src/platform.py#L9-L12) runs the unauthenticated
+import at module top level:
+
+```python
+try:
+    import config
+except:
+    import config_default as config
+```
+
+`find . -name config.py` outside `f469-disco/` and `.git/` returns nothing, and
+`config` is not in the frozen manifest, so the importer probes the VFS. The
+pinned MicroPython fork sets CWD to `/qspi` and keeps the `""` `sys.path`
+entry, which is what makes that probe reach writable storage.
+
 **Recommended fix**
 
 Replace path mutation with a frozen/native allowlist. Remove the `""` entry.
@@ -2177,9 +2620,35 @@ Move CWD to RAM or another non-persistent location before imports. Make the
 executable Python. Test that every production import resolves only to frozen or
 native code.
 
+**Action plan**
+
+1. Remove the executable-import escape hatch. Freeze a `config.py` into the
+   manifest so the VFS is never probed, or replace the mechanism with
+   authenticated data:
+
+   ```python
+   # platform.py
+   try:
+       import config            # frozen only
+   except ImportError:
+       import config_default as config
+   ```
+
+   and add `config.py` to [manifests/](../../manifests/) so the frozen module
+   always wins. Note the bare `except:` must become `except ImportError:` or a
+   syntax error in a planted `/qspi/config.py` would still be swallowed.
+2. Fix the `sys.path` sanitization and drop the `""` entry:
+
+   ```python
+   sys.path[:] = [p for p in sys.path if p and "qspi" not in p]
+   ```
+3. Chdir to a non-persistent location before any import runs.
+4. Add a boot-time assertion that every security-relevant module resolved to a
+   frozen path (`__file__` absent on frozen modules is a usable signal).
+
 ---
 
-### F-18: The hardware TRNG fails open and emits zero-valued words
+### F-18: The native TRNG driver fails open and emits zero-valued words
 
 **Status:** Confirmed · **Severity:** Medium. The seed impact becomes High only
 if the failure persists while the software entropy pool holds no
@@ -2189,9 +2658,11 @@ persistence and on whether the attacker knows the accumulated pool state.
 
 - **Affected component:** STM32 random-number peripheral driver, `os.urandom`,
   and application entropy pooling.
-- **Files and code regions:** `ports/stm32/rng.c:31-55` (`rng_get`) and
-  `ports/stm32/moduos.c:97-110` (`os_urandom`) in the pinned `micropython` fork;
-  [rng.py:6](../../src/rng.py#L6), [rng.py:23-43](../../src/rng.py#L23-L43);
+- **Files and code regions:**
+  [rng.c:33-55](../../f469-disco/micropython/ports/stm32/rng.c#L33-L55)
+  (`rng_get`) and `ports/stm32/moduos.c:97-110` (`os_urandom`) in the pinned
+  `micropython` fork; [rng.py:7](../../src/rng.py#L7),
+  [rng.py:45-116](../../src/rng.py#L45-L116);
   [decorators.py:6-18](../../src/gui/decorators.py#L6-L18).
 - **Functions and modules:** `rng_get`, `os_urandom`, `get_random_bytes`,
   `feed_touch`.
@@ -2257,19 +2728,91 @@ then reproduce the resulting mnemonic entropy.
 
 **Why existing checks do not prevent it**
 
-`src/rng.py` layers a software pool over this source, but the pool starts from
-the constant `b"7" * 64`, has no TRNG health state, and requests above 64 bytes
-bypass it entirely. For mnemonic-sized requests the pool does preserve earlier
-touch-derived entropy, so it can prevent straightforward seed reproduction when
-that state is unknown to the attacker. It still cannot detect or report that the
-hardware source failed, and a pool that has received only known inputs produces
-known output.
+There is one compensating control, and it sits above the defect rather than at
+it. [src/rng.py](../../src/rng.py) carries a Python-layer liveness check:
+[rng.py:18-21](../../src/rng.py#L18-L21) defines `RNGError(BaseError)`, and
+[rng.py:45-91](../../src/rng.py#L45-L91) defines `_looks_dead(data)`, which
+rejects a buffer where any single byte value covers more than half of it
+(n ≥ 8), or where the distinct-value count is below half the expected count for
+healthy output. The threshold is computed in fixed point
+(`_expected_distinct`), so it is identical on MicroPython single-precision and
+CPython double-precision builds. It gates the only entry point at
+[rng.py:96-108](../../src/rng.py#L96-L108):
+
+```python
+def get_random_bytes(nbytes):
+    global entropy_pool
+    d = get_trng_bytes(nbytes)
+    if _looks_dead(d):
+        raise RNGError("TRNG returned no entropy")
+    feed(d)
+```
+
+Every seed- and key-generating caller goes through it:
+[helpers.py:24](../../src/helpers.py#L24) (mnemonic),
+[ram.py:158](../../src/keystore/ram.py#L158) and
+[flash.py:148,183](../../src/keystore/flash.py#L148) (device/enc secrets),
+[securechannel.py:82](../../src/keystore/javacard/applets/securechannel.py#L82).
+16 unit tests in
+[test/tests_native/test_rng.py](../../test/tests_native/test_rng.py) cover the
+partial-stall, majority-stall, low-variety, short-buffer, and >64-byte paths.
+
+What that check cannot do is see the peripheral. It is a statistical inference
+over output bytes, so it catches a stalled or mostly-stalled source and nothing
+else: a biased-but-varied source, a seed error reported only in `SECS`, and a
+clock error reported only in `CECS` all pass it. There is no Python-visible
+health API to consult instead — `grep -n "SECS\|CECS" rng.c` returns nothing.
+
+Two paths bypass the check, both assessed as non-security-critical:
+`get_random_bytes(1)` at [input.py:233](../../src/gui/screens/input.py#L233)
+skips it (`n < 4`), which is intentional and documented in the docstring; and
+[platform.py:271](../../src/platform.py#L271) calls `os.urandom` directly, but
+only to overwrite flash blocks during wipe.
+
+The software pool does not close the gap either. It starts from the constant
+`b"7" * 64` ([rng.py:7](../../src/rng.py#L7)), holds no TRNG health state, and
+requests above 64 bytes bypass it entirely. For mnemonic-sized requests it does
+preserve earlier touch-derived entropy, which can prevent straightforward seed
+reproduction when that state is unknown to the attacker.
 
 **Recommended fix**
 
 Make `rng_get()` signal failure instead of returning `0`. Check `SECS` and
 `CECS`. Consume full 32-bit words. Expose a Python-visible health and liveness
 check. Refuse to generate a mnemonic if it fails.
+
+**Action plan**
+
+1. Fix the driver in the fork. `rng_get()` should signal failure rather than
+   return `0`:
+
+   ```c
+   // ports/stm32/rng.c
+   uint32_t rng_get(void) {
+       ...
+       while (!(RNG->SR & RNG_SR_DRDY)) {
+           if (HAL_GetTick() - start >= RNG_TIMEOUT_MS) {
+               rng_last_error = RNG_ERR_TIMEOUT;
+               return 0;
+           }
+       }
+       if (RNG->SR & (RNG_SR_SECS | RNG_SR_CECS)) {
+           rng_last_error = RNG_ERR_SEED_OR_CLOCK;
+           return 0;
+       }
+       return RNG->DR;
+   }
+   ```
+
+   Have `os_urandom` raise `OSError` when `rng_last_error` is set, and consume
+   full 32-bit words rather than one word per byte.
+2. Expose `pyb.rng_health()` so `src/rng.py` can check the peripheral directly
+   instead of inferring from output statistics.
+3. Replace the constant pool seed `b"7" * 64`
+   ([rng.py:7](../../src/rng.py#L7)) with a health-checked hardware seed at boot
+   — see F-14.
+4. Keep `_looks_dead` after the driver is fixed. It is cheap, and it is the only
+   check that survives a driver that reports success while producing garbage.
 
 ---
 
@@ -2282,7 +2825,7 @@ layout, not rendering, so it does not depend on target LVGL behavior.
 - **Files and code regions:**
   [prompt.py:16-30](../../src/gui/screens/prompt.py#L16-L30);
   [common.py:140-159](../../src/gui/common.py#L140-L159);
-  [transaction.py:68-94](../../src/gui/screens/transaction.py#L68-L94);
+  [transaction.py:60-85](../../src/gui/screens/transaction.py#L60-L85);
   [manager.py:764](../../src/apps/wallets/manager.py#L764),
   [manager.py:766](../../src/apps/wallets/manager.py#L766).
 - **Functions and modules:** `Prompt`, the fixed confirmation buttons,
@@ -2349,11 +2892,57 @@ then obtain approval without scrolling.
 There is no scroll-to-end gate, no pagination limit, and no fixed warning region
 controlling the button.
 
+**Code at this tree**
+
+In [prompt.py:16-30](../../src/gui/screens/prompt.py#L16-L30) the message goes
+into a scrolling page while the buttons attach to the screen:
+
+```python
+self.page = lv.page(self)
+self.page.set_size(480, 600)
+self.message = add_label(message, scr=self.page)
+...
+(self.cancel_button, self.confirm_button) = add_button_pair(..., scr=self)
+```
+
+`TransactionScreen` appends outputs, then the fee
+([transaction.py:68-79](../../src/gui/screens/transaction.py#L68-L79)), then
+warnings ([transaction.py:81-85](../../src/gui/screens/transaction.py#L81-L85))
+into the same `self.page`, so the fee's vertical position is a function of the
+attacker-chosen output count. No scroll-to-end gate exists anywhere in
+`src/gui/`.
+
 **Recommended fix**
 
 Render the fee and the warning block outside the scrolling container, or disable
 Confirm until the container has been scrolled to the end. Cap or paginate the
 output list.
+
+**Action plan**
+
+1. Cheapest effective change: move the fee and the aggregated warning block out
+   of `self.page` and into fixed screen-level labels above the button pair, so
+   they cannot be scrolled off.
+2. Stronger: disable Confirm until the page has been scrolled to the end.
+
+   ```python
+   # prompt.py
+   def _on_scroll(self, obj, event):
+       if event == lv.EVENT.VALUE_CHANGED:
+           at_end = (self.page.get_scrl().get_y() + self.page.get_scrl().get_height()
+                     <= self.page.get_height() + 4)
+           if at_end:
+               self.confirm_button.set_state(lv.btn.STATE.REL)
+   ```
+
+   Start the button in `lv.btn.STATE.INA` when the content overflows the
+   viewport.
+3. Cap or paginate the output list on the default page, and render
+   `"%d change outputs not shown" % num_change_outputs` — the counter already
+   exists at
+   [transaction.py:60-66](../../src/gui/screens/transaction.py#L60-L66) and is
+   discarded (see F-24).
+
 ---
 
 ### F-23: Liquid asset names are chosen by the host
@@ -2371,9 +2960,9 @@ at Medium.
   [liquid/manager.py:129-141](../../src/apps/wallets/liquid/manager.py#L129-L141),
   [liquid/manager.py:162-190](../../src/apps/wallets/liquid/manager.py#L162-L190),
   [liquid/manager.py:583-593](../../src/apps/wallets/liquid/manager.py#L583-L593);
-  [transaction.py:99-100](../../src/gui/screens/transaction.py#L99-L100),
-  [transaction.py:126-127](../../src/gui/screens/transaction.py#L126-L127),
-  [transaction.py:168-188](../../src/gui/screens/transaction.py#L168-L188).
+  [transaction.py:98-99](../../src/gui/screens/transaction.py#L98-L99),
+  [transaction.py:125-126](../../src/gui/screens/transaction.py#L125-L126),
+  [transaction.py:167-189](../../src/gui/screens/transaction.py#L167-L189).
 - **Functions and modules:** `LWalletManager` asset import, persistence,
   lookup, and display metadata.
 - **Attacker capability:** A host on any enabled channel.
@@ -2447,12 +3036,62 @@ AEAD-encrypted under `keystore.userkey`, so it cannot be tampered with at rest.
 The import prompt shows only a raw identifier the user cannot readily
 authenticate, and no reserved policy-asset mapping exists.
 
+**Code at this tree**
+
+[liquid/manager.py:129-139](../../src/apps/wallets/liquid/manager.py#L129-L139)
+stores a host-supplied label after one prompt, and
+[liquid/manager.py:580-589](../../src/apps/wallets/liquid/manager.py#L580-L589)
+returns it unconditionally:
+
+```python
+def asset_label(self, asset):
+    if asset is None:
+        return "L-???"
+    if isinstance(asset, str):
+        return asset
+    if asset in self.assets:
+        return self.assets[asset]
+    h = hexlify(bytes(reversed(asset))).decode()
+    return "L-"+h[:4]+"..."+h[-4:]
+```
+
+There is no built-in table of known asset IDs —
+`grep -rn "policy_asset\|L-BTC" src/apps/wallets/liquid/` finds no reserved
+mapping. `DUMP_ASSETS` at
+[liquid/manager.py:140-141](../../src/apps/wallets/liquid/manager.py#L140-L141)
+returns the whole registry with no confirmation.
+
 **Recommended fix**
 
 Hard-code the policy asset ID per Liquid network and render it with a reserved,
 non-overridable name. Refuse host labels that collide with reserved names. Always
 show the first and last bytes of the raw asset ID next to any label, so a name
 can never fully replace identity. Restrict labels to a short printable-ASCII set.
+
+**Action plan**
+
+1. Add the policy asset per network to
+   [liquid/networks.py](../../f469-disco/libs/common/embit/src/embit/liquid/networks.py)
+   or to a local constant, and make it non-overridable:
+
+   ```python
+   RESERVED_ASSETS = {
+       "liquidv1":  (unhexlify("6f0279e9ed041c3d710a9f57d0c02928416460c4b722ae3457a11eec381c526d")[::-1], "L-BTC"),
+       "liquidtestnet": (..., "tL-BTC"),
+   }
+   def asset_label(self, asset):
+       reserved = RESERVED_ASSETS.get(self.network)
+       if reserved and asset == reserved[0]:
+           return reserved[1]
+       ...
+   ```
+2. Reject host labels that collide with a reserved name in the `ADD_ASSET`
+   handler.
+3. Always render the first and last bytes of the raw asset ID next to any
+   label, so a name can never fully replace identity:
+   `"%s (%s…%s)" % (label, h[:4], h[-4:])`.
+4. Restrict labels to short printable ASCII, and drop `check_unknown_assets`'
+   habit of asking for labels during the signing confirmation.
 
 ---
 
@@ -2464,8 +3103,8 @@ and 2 are trivially verifiable, and point 1 is dead Python.
 - **Affected component:** PSBT display metadata and `TransactionScreen`.
 - **Files and code regions:**
   [manager.py:747-771](../../src/apps/wallets/manager.py#L747-L771);
-  [transaction.py:19-30](../../src/gui/screens/transaction.py#L19-L30),
-  [transaction.py:67-92](../../src/gui/screens/transaction.py#L67-L92).
+  [transaction.py:16-27](../../src/gui/screens/transaction.py#L16-L27),
+  [transaction.py:60-85](../../src/gui/screens/transaction.py#L60-L85).
 - **Functions and modules:** Wallet-manager output metadata,
   `TransactionScreen`.
 - **Attacker capability:** Supply a transaction whose safety depends on hidden
@@ -2521,16 +3160,14 @@ thrown away and replaced by a much less important notice.
 rendered, but there is no absolute threshold, no sat/vB rate, no percentage
 threshold, no warning styling, and `meta["warnings"]` is never populated on the
 Bitcoin path. `if fee:` also means a fee of exactly zero renders no fee row
-(that part is H-05), and a **negative** fee — reachable through ✅ F-01, ✅ F-02, or
-F-03 — renders as an ordinary `Fee: -N satoshi (-M%)` with no warning. With
-✅ F-01 and ✅ F-02 fixed, F-03 is the remaining route to that state, and the
-missing fee sanity check itself is unchanged.
+(that part is H-05), and a **negative** fee — reachable through F-03 — renders
+as an ordinary `Fee: -N satoshi (-M%)` with no warning.
 
 Fields that appear **only** on the hidden details page for an ordinary
 transaction are the number of inputs, every input value and label, and every
 change output. `enable_inputs` opens that page by default only for custom
 sighashes, unknown Liquid values, or issuance. Transaction version, locktime, and
-input sequence are not rendered on either page in v1.9.0.
+input sequence are not rendered on either page.
 
 **Attack trace**
 
@@ -2542,6 +3179,27 @@ overwrites the relevant context.
 Critical fields are hidden on a details page or never generated, and warnings use
 a single replaceable string.
 
+**Code at this tree**
+
+**1. Dead `branch_txt`** —
+[manager.py:746-752](../../src/apps/wallets/manager.py#L746-L752) holds the bare
+discarded expressions.
+
+**2. Overwritten warning** —
+[manager.py:757-760](../../src/apps/wallets/manager.py#L757-L760) overwrites the
+gap-limit warning with the watch-only warning.
+
+**3. No fee sanity check** —
+[transaction.py:68](../../src/gui/screens/transaction.py#L68) is
+`if meta.get("fee"):`, so a zero fee renders no row (H-05) and a negative fee
+renders as an ordinary line. `grep -rn 'meta\["warnings"\]' src/apps/wallets/manager.py`
+returns nothing, so `meta["warnings"]` is never populated on the Bitcoin path,
+and the `if "warnings" in meta` block at
+[transaction.py:81-85](../../src/gui/screens/transaction.py#L81-L85) is dead for
+Bitcoin. `num_change_outputs` at
+[transaction.py:60-66](../../src/gui/screens/transaction.py#L60-L66) is computed
+and discarded.
+
 **Recommended fix**
 
 Fix `branch_txt`. Make `warning` a list. Add absolute and percentage fee
@@ -2549,6 +3207,49 @@ thresholds into `meta["warnings"]`. Show input values, transaction version,
 locktime, and sequence on the default page, or at least an "N change outputs not
 shown" line — the counter for it, `num_change_outputs`, is already computed and
 then discarded.
+
+**Action plan**
+
+1. Fix the dead code:
+
+   ```python
+   branch_txt = ""
+   if branch_idx == 1:
+       branch_txt = "change "
+   elif branch_idx > 1:
+       branch_txt = "branch %d " % branch_idx
+   metaout["label"] = "%s %s#%d" % (wallet.name, branch_txt, idx)
+   ```
+2. Make `warning` a list and render all of them:
+
+   ```python
+   warnings = metaout.setdefault("warnings", [])
+   if allowed_idx <= idx:
+       warnings.append("Derivation index is by %d larger than last known used index %d!" % ...)
+   if wallet.is_watchonly:
+       warnings.append("Watch-only wallet!")
+   ```
+
+   Update both render sites in `transaction.py` to iterate.
+3. Populate `meta["warnings"]` with fee thresholds in `preprocess_psbt`:
+
+   ```python
+   meta["fee"] = fee
+   send_amount = sum(o["value"] for o in meta["outputs"] if not o["change"])
+   if fee < 0:
+       meta.setdefault("warnings", []).append("NEGATIVE FEE - this transaction is invalid!")
+   elif send_amount > 0 and fee * 100 > send_amount * 10:
+       meta.setdefault("warnings", []).append(
+           "Fee is %.1f%% of the amount sent!" % (fee * 100 / send_amount))
+   elif fee > 1_000_000:
+       meta.setdefault("warnings", []).append("Fee is over 0.01 BTC!")
+   ```
+4. Change `if meta.get("fee"):` to `if "fee" in meta:` so a zero fee renders
+   (H-05).
+5. Render `"%d change outputs not shown" % num_change_outputs` on the default
+   page.
+6. This item is also a prerequisite for DOC-02: `meta["warnings"]` must be
+   populated on the Bitcoin path before any documented warning can be true.
 
 ---
 
@@ -2649,12 +3350,38 @@ CRCs, and boot it.
 ECDSA is used only during the SD upgrade flow. Boot accepts recomputable unkeyed
 CRCs.
 
+**Code at this tree**
+
+[bl_integrity_check.h:47-63](../../bootloader/core/bl_integrity_check.h#L47-L63)
+defines the record with only `pl_crc` and `struct_crc`. There is no signature,
+MAC, or key at boot. ECDSA runs exactly once, in the SD upgrade path at
+[bootloader.c:1254-1256](../../bootloader/core/bootloader.c#L1254-L1256), after
+the copy to flash — which is the one positive here: the signed bytes are the
+executed bytes.
+
 **Recommended fix**
 
 Verify a signature at boot, or at minimum a keyed MAC over a device-held key,
 instead of a CRC. Make write protection unconditional for release builds rather
 than an `#ifdef`, and make WRP a boot-time invariant that is reasserted on every
 start and every upgrade exit.
+
+**Action plan**
+
+1. Verify at boot rather than CRC. Cheapest version that keeps boot time
+   acceptable: add a keyed MAC field to `bl_integrity_check_rec_t`, computed over
+   the payload under a device-unique key derived at first boot and stored in the
+   key-storage sector the fork already reserves. Bump `struct_rev` so old records
+   are rejected.
+2. If full ECDSA at boot is affordable on this MCU, prefer it — the signature is
+   already present in the upgrade file and could be retained alongside the
+   payload.
+3. Make write protection unconditional for release builds instead of
+   `#ifdef WRITE_PROTECTION`, and reassert WRP as a boot-time invariant in
+   `blsys_init()` for the firmware and bootloader regions, not only the start-up
+   sector.
+4. Have `make-initial-firmware.py` document that a factory-flashed device has
+   RDP1 but no WRP until the first successful upgrade.
 
 ---
 
@@ -2727,11 +3454,47 @@ message is returned without verification.
 Cross-part checksum equality compares attacker-supplied declarations, and bare
 assertions do not authenticate the result.
 
+**Code at this tree**
+
+[decoder.py](../../f469-disco/libs/common/microur/decoder.py) stores the header
+checksum and only compares declarations across parts:
+
+```text
+decoder.py:51  data = bytewords.decode_check(stream.read())   # single-part only
+decoder.py:67  self.checksum = self.checksum or checksum
+decoder.py:68  assert self.checksum == checksum               # declaration vs declaration
+```
+
+`grep -n "crc32" decoder.py` returns nothing, so `_combine()` returns the
+reassembled message without computing CRC32 over it. The multi-part path goes
+through `decode_write()` → `decodeinto()`, which has no CRC check.
+
 **Recommended fix**
 
 Compute CRC32 over the output of `_combine()` and compare it with
 `self.checksum`; raise on mismatch. Use `stream_decode_check` on the multi-part
 path too.
+
+**Action plan**
+
+1. Verify the message-level CRC32 in `_combine()`:
+
+   ```python
+   # decoder.py, at the end of _combine()
+   import binascii
+   crc = binascii.crc32(result) & 0xFFFFFFFF
+   if crc != self.checksum:
+       raise URError("UR message checksum mismatch: got %08x, declared %08x"
+                     % (crc, self.checksum))
+   ```
+
+   For the streaming case, accumulate the CRC32 incrementally rather than
+   buffering.
+2. Use `stream_decode_check` on the multi-part path so the per-part bytewords
+   CRC is also enforced, and remove the stale "TODO: Checksum is currently
+   ignored" docstring.
+3. Apply H-08 (bytewords range validation) and H-13 (`assert` → `raise`) in the
+   same change; all three protect the same parser.
 
 ---
 
@@ -2814,11 +3577,54 @@ into any later transaction.
 The warning names the flag but does not explain that outputs are uncommitted, and
 no policy rejects the dangerous modes.
 
+**Code at this tree**
+
+[manager.py:37-44](../../src/apps/wallets/manager.py#L37-L44) builds all six
+combinations into the accepted set.
+[manager.py:417-422](../../src/apps/wallets/manager.py#L417-L422) shows
+`"\nCustom SIGHASH flags are used!\n\n"` with `confirm_text="Proceed anyway"`
+and returns `None` on confirm, and
+[manager.py:778](../../src/apps/wallets/manager.py#L778) does
+`inp_sighash = sighash or inp.sighash_type or self.DEFAULT_SIGHASH`. The Liquid
+manager adds a `| RANGEPROOF` variant of each at
+[liquid/manager.py:19-29](../../src/apps/wallets/liquid/manager.py#L19-L29).
+
 **Recommended fix**
 
 Refuse `NONE` and `NONE | ANYONECANPAY` outright. For `SINGLE`, verify that a
 matching output index exists. Make the warning describe what the flag gives away,
 and make Cancel the affirmative button.
+
+**Action plan**
+
+1. Refuse the blank-cheque modes outright:
+
+   ```python
+   FORBIDDEN_SIGHASHES = (SIGHASH.NONE, SIGHASH.NONE | SIGHASH.ANYONECANPAY)
+   ...
+   if inp.sighash_type in FORBIDDEN_SIGHASHES:
+       raise WalletError(
+           "This transaction asks for SIGHASH_NONE, which would let anyone "
+           "redirect the funds. Refusing to sign.")
+   ```
+
+   Apply in both `preprocess_psbt` and the Liquid override, accounting for the
+   `| RANGEPROOF` variants.
+2. For `SINGLE`, verify a matching output index exists before offering the
+   prompt.
+3. Rewrite the warning to state the consequence, and swap the button roles so
+   Cancel is the affirmative action:
+
+   ```python
+   Prompt("DANGER", "\nInput %d asks to sign with %s.\n\n"
+                    "This does NOT commit to the outputs. Anyone holding this "
+                    "signature can spend the input into any transaction.\n"
+          % (i, name),
+          confirm_text="Cancel", cancel_text="I understand, sign anyway")
+   ```
+4. Separately, add `SIGHASH.DEFAULT` (`0x00`) to `SIGHASH_NAMES` so Taproot
+   PSBTs are not rejected with "Unknown sighash type: 0!" — availability, not
+   security.
 
 ---
 
@@ -2907,12 +3713,63 @@ address fields. Authenticity is checked after unprotect, erase, and write, with
 no cleanup path and no boot-time WRP reassertion for the firmware and bootloader
 regions.
 
+**Code at this tree**
+
+[bootloader.c:1230-1234](../../bootloader/core/bootloader.c#L1230-L1234) clears
+WRP before anything is verified:
+
+```c
+// Remove write protection from needed sections of the flash memory
+if (!set_write_protection_state(&bl_ctx.file_metadata, p_args->loaded_from, false)) {
+  fatal_error("Error while removing write protection");
+}
+```
+
+Then erase (1237), copy (1242), hash (1247), and only at
+[bootloader.c:1254-1263](../../bootloader/core/bootloader.c#L1254-L1263) does
+`verify_multisig` run — whose failure branch does `return false` **without**
+restoring WRP. The restore at
+[bootloader.c:1271-1277](../../bootloader/core/bootloader.c#L1271-L1277) is
+reachable only on the success path.
+
 **Recommended fix**
 
 Make WRP a boot-time invariant, not a success side effect. Reapply it in a
 mandatory cleanup path and before every normal boot. Prefer verification before
 destructive writes, or require explicit physical authorization for the
 erase-and-copy stage. Report protection state on failure.
+
+**Action plan**
+
+1. Restore WRP on every exit from `do_upgrade_with_file`. Simplest correct
+   shape:
+
+   ```c
+   bool ok = false;
+   /* ... unprotect, erase, copy, hash ... */
+   if (verify_multisig(...)) {
+       if (!create_icrs(...)) { fatal_error("..."); }
+       ok = true;
+   } else {
+       (void)blsys_alert(bl_alert_error, "Signature Error", err_text, BL_FOREVER, 0U);
+   }
+   #ifdef WRITE_PROTECTION
+   if (!set_write_protection_state(&bl_ctx.file_metadata, p_args->loaded_from, true)) {
+       fatal_error("Error while applying write protection");
+   }
+   #endif
+   return ok;
+   ```
+
+   Audit every other early `return` and `fatal_error` between the unprotect and
+   the restore for the same problem.
+2. Better: verify the file's signature **before** touching WRP, then verify
+   again from flash after the copy. The first check costs one extra hash pass and
+   removes the attacker's ability to clear WRP with an unsigned card at all. The
+   second preserves the "signed bytes are executed bytes" property F-25 notes as
+   a positive.
+3. Reassert WRP for the firmware and bootloader regions in `blsys_init()` on
+   every boot, so a device that was left unprotected recovers at next power-on.
 
 ---
 
@@ -3001,11 +3858,41 @@ loop so byte 33 overwrites the stack byte next to `rx_buf`.
 The native loop's capacity comparison is off by one, both callers trust the
 returned length, and the target build has no stack protector.
 
+**Code at this tree**
+
+[scard_io.c:333-345](../../f469-disco/usermods/scard/ports/stm32/scard_io.c#L333-L345)
+has `while(bytes_read <= nbytes && ...)`. Both callers allocate
+`uint8_t rx_buf[32]` and forward the returned count unchecked
+([connection.c:656-661](../../f469-disco/usermods/scard/connection.c#L656-L661),
+[connection.c:854-859](../../f469-disco/usermods/scard/connection.c#L854-L859)).
+[memorycard.py:51-59](../../src/keystore/memorycard.py#L51-L59) reaches this
+before PIN entry via `is_available()`.
+
 **Recommended fix**
 
 Change the loop condition to `< nbytes`. Reject any returned size above the
 supplied buffer at both callers. Restore compiler warnings (H-22). Fuzz ATR and
 T=1 timing with a smartcard emulator under the release toolchain.
+
+**Action plan**
+
+1. One-character fix in the loop condition:
+
+   ```c
+   while(bytes_read < nbytes && uart_rx_any(handle->uart_obj)) {
+   ```
+2. Defense in depth at both callers:
+
+   ```c
+   size_t n_bytes = scard_rx_readinto(handle, rx_buf, sizeof(rx_buf));
+   if (n_bytes > sizeof(rx_buf)) {
+       /* cannot happen after the loop fix; fail closed if it does */
+       return SCARD_ERR_INTERNAL;
+   }
+   ```
+3. Restore `-Wall` (H-22) and fuzz ATR/T=1 timing with a card emulator under the
+   release toolchain — this defect and H-23 are both in classes
+   `-Wall -Werror` would surface.
 
 ---
 
@@ -3045,7 +3932,7 @@ theft chain.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** The displayed address must correspond
   one-to-one with the scriptPubKey being signed.
-- **Owning codebase:** Vendored `embit` (`liquid/addresses.py` and
+- **Owning codebase:** `embit` (`liquid/addresses.py` and
   `liquid/blech32.py`), with the unguarded call site in this repository.
 
 **Root cause: two defects that cancel each other's protection**
@@ -3135,7 +4022,7 @@ validation is what makes the confidential branch permissive.
   change, so no ownership comparison runs on it.
 - Nothing in the display layer distinguishes a rendered address from a hex
   fallback. `show_output`
-  ([transaction.py:168-190](../../src/gui/screens/transaction.py#L168-L190))
+  ([transaction.py:167-196](../../src/gui/screens/transaction.py#L167-L196))
   formats whatever string it is given.
 
 **Exploitability limits**
@@ -3157,6 +4044,20 @@ Medium reflects that combination: the display-to-output correspondence property
 is definitively broken, while every full theft chain carries an extra unproven
 condition.
 
+**Code at this tree**
+
+[liquid/addresses.py:19-30](../../f469-disco/libs/common/embit/src/embit/liquid/addresses.py#L19-L30)
+has the `ver = ver % 0x50` reduction with the `FIXME` intact, and the round-trip
+guard is inert because
+[blech32.py:112-124](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L112-L124)
+has all four validation checks commented out. The strict `bech32.decode` used on
+the Bitcoin path retains them, which is why only the confidential branch is
+permissive. The unguarded call site is
+[liquid/manager.py:70-74](../../src/apps/wallets/liquid/manager.py#L70-L74),
+which calls `liquid_address` before the Bitcoin manager's `try/except` hex
+fallback at [manager.py:91-99](../../src/apps/wallets/manager.py#L91-L99) is
+reachable.
+
 **Recommended fix**
 
 1. Restore the four commented-out checks in `blech32.decode`. They cost nothing
@@ -3168,6 +4069,44 @@ condition.
 4. Route `LWalletManager.get_address` through the same exception guard as the
    Bitcoin manager, and label hex fallbacks on screen as "unrecognized output
    script" instead of showing bare hex where an address normally appears.
+
+**Action plan**
+
+1. Uncomment the four checks in `blech32.decode`:
+
+   ```python
+   decoded = convertbits(data[1:], 5, 8, False)
+   if decoded is None or len(decoded) < 2 or len(decoded) > 40:
+       return (None, None)
+   if data[0] > 16:
+       return (None, None)
+   if data[0] == 0 and len(decoded) != 20 and len(decoded) != 32:
+       return (None, None)
+   return (data[0], decoded)
+   ```
+
+   Note the confidential payload is `blinding_key.sec() + program`, so the
+   length bounds must account for the 33-byte prefix on the blech32 side.
+2. Gate `addresses.address` on script type and decode OP_N explicitly, resolving
+   the `FIXME`:
+
+   ```python
+   st = script.script_type()
+   if st not in ("p2wpkh", "p2wsh", "p2tr"):
+       raise ValueError("Unsupported script type for Liquid address: %s" % st)
+   op = script.data[0]
+   if op == 0x00:
+       ver = 0
+   elif 0x51 <= op <= 0x60:
+       ver = op - 0x50
+   else:
+       raise ValueError("Invalid witness version opcode")
+   ```
+3. Wrap `LWalletManager.get_address` in the same `try/except` the Bitcoin
+   manager uses, and label the hex fallback on screen as "UNRECOGNIZED OUTPUT
+   SCRIPT" rather than rendering bare hex where an address normally appears.
+   This also fixes H-25.
+
 ---
 
 ### F-09: The ARM compiler archive is pinned with a legacy MD5 digest
@@ -3227,10 +4166,40 @@ already fixed digest.
 The fixed MD5 check is legacy assurance debt. It does block arbitrary
 collision-only substitution.
 
+**Code at this tree**
+
+[Dockerfile:12-15](../../Dockerfile#L12-L15) pins the MD5 digest
+`2b9eeccc33470f9d3cda26983b9d2dc6`, and the Docker path is the documented
+deterministic build
+([docs/deterministic-firmware-build.md](../../docs/deterministic-firmware-build.md)).
+
+A parallel Nix dev-shell path exists ([flake.nix](../../flake.nix),
+`pkgs.buildPackages.gcc-arm-embedded-9`, pinned through `flake.lock` narHashes)
+and avoids MD5 — but it is a dev shell, not the release build, so it does not
+cover this. The inconsistency is internal to the release build: the base image
+is digest-pinned and Python requirements use `--require-hashes`, while the
+compiler that produces the firmware is pinned with MD5.
+
 **Recommended fix**
 
 Verify the archive using the publisher-provided SHA-256 or stronger digest and an
 immutable release URL. Prefer authenticated, reproducible toolchain inputs.
+
+**Action plan**
+
+1. Replace the MD5 pin with SHA-256 and an immutable URL:
+
+   ```dockerfile
+   RUN curl -sSfL -o arm-toolchain.tar.bz2 "<immutable-release-url>" && \
+       echo "<sha256>  arm-toolchain.tar.bz2" | sha256sum --check - && \
+       tar xf arm-toolchain.tar.bz2 -C /opt && rm arm-toolchain.tar.bz2
+   ```
+
+   ARM publishes SHA-256 for the 9-2020-q2 archives; record where the digest
+   came from in a comment.
+2. Or make the Nix flake the release build path, so the toolchain comes from a
+   content-addressed store with a `flake.lock` narHash, and retire the
+   Dockerfile's independent download.
 
 ---
 
@@ -3292,10 +4261,39 @@ None. No current input reaches a returning callback.
 The callbacks neither abort nor raise, although `ARG_CHECK` returns failure and
 the reviewed callers raise.
 
+**Code at this tree**
+
+[ext_callbacks.c](../../f469-disco/usermods/secp256k1/mpy/config/ext_callbacks.c)
+is two empty function bodies. Not currently reachable: the surjection-proof list
+branches are the only unchecked `gc_alloc` sinks, and their Specter call sites
+are commented out at
+[liquid/manager.py:441-454](../../src/apps/wallets/liquid/manager.py#L441-L454).
+
 **Recommended fix**
 
 Route both callbacks to a hard fault, a secure reset, or an equivalent
 fail-closed handler, and assert that they cannot return.
+
+**Action plan**
+
+Match what the bootloader already does with `blsys_fatal_error`:
+
+```c
+#include "py/runtime.h"
+void secp256k1_default_illegal_callback_fn(const char* str, void* data){
+    (void)data;
+    mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("secp256k1 illegal argument"));
+    for(;;){}   /* unreachable; assert the callback cannot return */
+}
+void secp256k1_default_error_callback_fn(const char* str, void* data){
+    (void)data;
+    mp_raise_msg(&mp_type_RuntimeError, MP_ERROR_TEXT("secp256k1 internal error"));
+    for(;;){}
+}
+```
+
+Verify the NLR jump is valid at every call site; if any callback can fire
+outside a MicroPython NLR context, use a hard reset there instead.
 
 ---
 
@@ -3307,7 +4305,7 @@ behavior. Hardware impact unresolved.
 - **Affected component:** Entropy collection, randomness export, and signing
   side-channel hardening.
 - **Files and code regions:**
-  [rng.py:6](../../src/rng.py#L6), [rng.py:23-43](../../src/rng.py#L23-L43);
+  [rng.py:7](../../src/rng.py#L7), [rng.py:96-116](../../src/rng.py#L96-L116);
   [getrandom.py:36-42](../../src/apps/getrandom.py#L36-L42);
   [apps/__init__.py:1-11](../../src/apps/__init__.py#L1-L11);
   [libsecp256k1.c](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c)
@@ -3335,10 +4333,11 @@ behavior. Hardware impact unresolved.
 
 **Evidence**
 
-- The software pool starts as the constant `b"7" * 64`.
-- There is no runtime TRNG health or liveness test.
+- The software pool starts as the constant `b"7" * 64`
+  ([rng.py:7](../../src/rng.py#L7)).
 - Requests above 64 bytes return fresh `os.urandom` output directly and bypass
-  the pool.
+  the pool ([rng.py:103-104](../../src/rng.py#L103-L104)). They are
+  liveness-checked by `_looks_dead`, but returned raw.
 - The production `getrandom` app returns up to 1000 bytes to a host with no
   confirmation. Above 64 bytes it exposes raw measurements from the
   security-critical entropy source.
@@ -3380,12 +4379,57 @@ measurements with no prompt.
 The host handler never calls confirmation, and the pool is bypassed for large
 requests.
 
+**Code at this tree**
+
+- [getrandom.py:36-42](../../src/apps/getrandom.py#L36-L42) returns up to 1000
+  bytes to a host with no confirmation; `show_fn` is a parameter and is never
+  called.
+- `getrandom` and `label` are in the production manifest
+  ([apps/__init__.py:1-11](../../src/apps/__init__.py#L1-L11)) despite their
+  "Demo of a single-file app" docstrings.
+- `grep -rn "context_randomize" src/` returns nothing.
+- Schnorr signing supplies no BIP340 auxiliary randomness.
+- A liveness check does exist above the driver
+  ([rng.py:45-91](../../src/rng.py#L45-L91), enforced for every request of 4
+  bytes or more), which is why this item is Low rather than Medium. Its limits
+  are in F-18.
+
 **Recommended fix**
 
 Seed the pool from hardware at boot only after health and liveness checks. Route
 all sizes through the pool. Fail on short reads. Confirm host randomness exports
 and show the requested byte count. Randomize the secp256k1 context. Consider
 auxiliary randomness for Schnorr signing.
+
+**Action plan**
+
+1. Seed the pool from health-checked hardware at boot instead of a constant:
+
+   ```python
+   # rng.py
+   entropy_pool = b"7" * 64          # replaced at boot
+   def seed_pool():
+       d = get_trng_bytes(64)
+       if _looks_dead(d):
+           raise RNGError("TRNG failed at boot")
+       feed(d)
+   ```
+
+   Call from `main.py` before any key material is generated.
+2. Route all sizes through the pool — remove the `if nbytes > 64: return d`
+   shortcut and generate in 64-byte chunks from the pool.
+3. Confirm `getrandom` exports:
+
+   ```python
+   if not await show_fn(Prompt("Send entropy to host?",
+           "The host is requesting %d bytes of entropy from the device TRNG."
+           % num_bytes)):
+       return
+   ```
+4. Curate the production app list — drop `getrandom` unless it has a use case,
+   or re-document it as a supported feature rather than a demo.
+5. Call `secp256k1.context_randomize` at boot and after each unlock, and pass
+   auxiliary randomness to Schnorr signing.
 
 ---
 
@@ -3448,15 +4492,52 @@ Numeric filenames prevent traversal but do not validate `m >= 1` and do not bind
 all frames to one payload. An attacker who controls the transport can already
 choose the full payload, and decoded content still reaches parsing and
 confirmation. So this is not an independent theft primitive, but it makes payload
-confusion easier and becomes more material together with ✅ F-01 or ✅ F-02. Those
-two are fixed, so this amplification no longer applies; the framing defect itself
-is unchanged.
+confusion easier, and it would amplify any display/signing divergence that
+lands on the same transport.
+
+**Code at this tree**
+
+[qr.py:552-561](../../src/hosts/qr.py#L552-L561):
+
+```python
+def parse_prefix(self, prefix: bytes):
+    print(prefix)
+    if not prefix.startswith(b"p") or b"of" not in prefix:
+        raise HostError("Invalid prefix, should be in pMofN format")
+    m, n = prefix[1:].split(b"of")
+    m = int(m); n = int(n)
+    if n < m or m < 0 or n < 0:      # m < 0, not m < 1; n < 0, not n < 1
+        raise HostError("Invalid prefix")
+    return m, n
+```
+
+So `p0ofN` yields `m = 0`, `self.parts[m - 1]` aliases `self.parts[-1]`, and
+`n == 0` gives an empty `self.parts` with `self.animated` already set. Session
+binding is only by part count `N`. The `print(prefix)` on line 553 is a second
+instance of H-18.
 
 **Recommended fix**
 
 Reject `m < 1`. Bind all frames to a payload or session identifier rather than
 only `N`. Verify the final BCUR shared hash before dispatch. Apply the UR-level
 fixes from F-28 at the same time.
+
+**Action plan**
+
+1. Correct the guard:
+
+   ```python
+   if m < 1 or n < 1 or n < m:
+       raise HostError("Invalid prefix")
+   ```
+2. Set `self.animated = True` only after `self.parts` has been successfully
+   sized, so a raise cannot leave the decoder half-initialized for the bare
+   `except:` to swallow.
+3. Bind frames to a session: hash the first frame's payload prefix and require
+   every later frame to carry the same `(N, session_id)`, rather than only `N`.
+4. Verify the assembled BCUR shared hash in the wallet-manager decode path
+   before dispatch, and apply F-28's UR-level fixes at the same time.
+5. Remove the `print(prefix)`.
 
 ---
 
@@ -3491,7 +4572,7 @@ fixes from F-28 at the same time.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** Decoding an address must reconstruct the exact
   scriptPubKey it encodes.
-- **Owning codebase:** Vendored `embit` (`liquid/addresses.py`).
+- **Owning codebase:** `embit` (`liquid/addresses.py`).
 
 **Evidence**
 
@@ -3538,6 +4619,16 @@ failed verification for an address the device does own. That still matters,
 because address verification is what a user relies on to confirm a receive
 address, and it is silently unsound for a descriptor type the firmware accepts.
 
+**Code at this tree**
+
+At
+[liquid/addresses.py:41-53](../../f469-disco/libs/common/embit/src/embit/liquid/addresses.py#L41-L53),
+`ver` is bound and then never used in either branch.
+`find_wallet_from_address` at
+[liquid/manager.py:98-123](../../src/apps/wallets/liquid/manager.py#L98-L123)
+compares `addr in [a, unconf_a]`, so a non-v0 Liquid wallet fails verification
+silently.
+
 **Recommended fix**
 
 Use the decoded witness version to rebuild the script
@@ -3546,7 +4637,32 @@ program lengths outside the BIP-350 ranges. Fixing `blech32.decode` per F-35 is 
 prerequisite: without those checks `addr_decode` will also accept versions above
 16 and programs outside 2-40 bytes.
 
+**Action plan**
+
+1. Use the decoded version in both branches:
+
+   ```python
+   def _wit_script(ver, prog):
+       if ver == 0 and len(prog) not in (20, 32):
+           raise ValueError("Invalid v0 witness program length")
+       if not (0 <= ver <= 16) or not (2 <= len(prog) <= 40):
+           raise ValueError("Invalid witness version or program length")
+       op = 0x00 if ver == 0 else 0x50 + ver
+       return script.Script(bytes([op, len(prog)]) + bytes(prog))
+   ```
+
+   Call it as `sc = _wit_script(ver, pubhash)` and `sc = _wit_script(ver, data)`.
+2. Fix `blech32.decode` first (F-35) — without those checks `addr_decode` will
+   also accept versions above 16 and programs outside 2–40 bytes, so
+   `_wit_script` becomes the only guard.
+3. Add a round-trip test: for each supported Liquid descriptor type, assert
+   `addr_decode(address(spk, bkey))[0].data == spk.data`.
+
 ## 7. Additional security-relevant behavior and hardening items
+
+These are items that are real but do not on their own constitute an exploitable
+vulnerability: latent defects, missing defense in depth, and one recorded
+negative result. They are ordered by identifier.
 
 | ID | Status | Severity | Confidence | Owning codebase |
 | --- | --- | --- | --- | --- |
@@ -3562,7 +4678,7 @@ prerequisite: without those checks `addr_decode` will also accept versions above
 | H-12 | Hardening | Low | High | This repository |
 | H-13 | Hardening | Low | High | Bundled `microur` plus this repository's build integration |
 | H-14 | Hardening | Low | High | This repository |
-| H-15 | Hardening | Low | High | This repository, bundled `microur`, and vendored `embit` by item |
+| H-15 | Hardening | Low | High | This repository, bundled `microur`, and the `embit` submodule by item |
 | H-16 | Hardening | Low | High | `secp256k1-embedded` binding fork |
 | H-17 | Hardening | Low | High | `secp256k1-embedded` binding fork |
 | H-18 | Hardening | Low | High | This repository |
@@ -3570,10 +4686,11 @@ prerequisite: without those checks `addr_decode` will also accept versions above
 | H-20 | Hardening | Low | High | Bootloader submodule STM32 start-up code |
 | H-21 | Design limitation | Low | High | This repository |
 | H-22 | Hardening | Low | High | Pinned MicroPython fork |
-| H-23 | Hardening | Low | High | `diybitcoinhardware/f469-disco` smartcard user module |
+| H-23 | Hardening | Low | High | `f469-disco` smartcard user module |
 | H-24 | Design limitation | Low | High | This repository |
-| H-25 | Hardening | Low | High | Vendored `embit` plus this repository's unguarded call site |
-| H-26 | Hardening | Informational | High | Vendored `embit` (not reachable from this firmware) |
+| H-25 | Hardening | Low | High | `embit` submodule plus this repository's unguarded call site |
+| H-26 | Hardening | Informational | High | `embit` submodule (not reachable from this firmware) |
+| H-27 | Hardening | Low | High | This repository |
 
 ### H-01: Adequate secp256k1 context size is hard-coded without a guard
 
@@ -3592,6 +4709,18 @@ compiled out without `VERIFY`, and `maybe_init_ctx()` never compares the require
 size. The native build also disables warnings-as-errors. A build-time or
 boot-time assertion should replace the hard-coded assumption.
 
+**Action.** Add a boot-time check in `maybe_init_ctx()`:
+
+```c
+size_t need = secp256k1_context_preallocated_size(SECP256K1_CONTEXT_SIGN |
+                                                  SECP256K1_CONTEXT_VERIFY);
+if (need > PREALLOCATED_CTX_SIZE) {
+    mp_raise_ValueError("secp256k1 context buffer too small");
+}
+```
+
+Plus a compile-time `_Static_assert` where the configuration is known.
+
 ### H-03: Liquid wallet export includes the master blinding private key
 
 A user-triggered Liquid wallet export embeds the master SLIP77 blinding private
@@ -3601,6 +4730,24 @@ in-product GUI export presents this key with an adequate consent step. This
 allows unblinding and privacy loss, but it does not grant Bitcoin or Liquid
 spending authority. The export stays user-triggered rather than an unconditional
 host leak.
+
+**Code at this tree.** The Liquid default descriptor embeds the SLIP77 key at
+[liquid/manager.py:203](../../src/apps/wallets/liquid/manager.py#L203):
+
+```python
+desc = "blinded(slip77(%s),%s)" % (self.keystore.slip77_key, desc)
+```
+
+`Wallet.export_menu` at
+[wallet.py:66-95](../../src/apps/wallets/wallet.py#L66-L95) serializes
+`self.descriptor.branch(0)` into a QR or an SD JSON file with no warning about
+the private key it contains.
+
+**Action.** In `export_menu`, detect a `slip77(` private key in the serialized
+descriptor and require an explicit prompt before export, reusing the wording
+from the host path in
+[blindingkeys/app.py](../../src/apps/blindingkeys/app.py). Offer a "public-only"
+export variant that substitutes the blinding *public* key.
 
 ### H-04: GUI popup preemption cannot retarget a confirmation press
 
@@ -3617,15 +4764,24 @@ Residual risk: a retained background screen can complete its own coroutine under
 a popup, and H-06's `is False` comparisons remain fragile. Touch-controller
 behavior below LVGL was not tested.
 
+**Code at this tree.** The mechanism is at
+[async_gui.py:46-60](../../src/gui/async_gui.py#L46-L60),
+[decorators.py:32-41](../../src/gui/decorators.py#L32-L41), and
+[screen.py:53-57](../../src/gui/screens/screen.py#L53-L57). No authorization
+bypass. The residual risks named above are tracked as H-06.
+
 ### H-05: A fee of exactly zero is not displayed
 
-[transaction.py:76-88](../../src/gui/screens/transaction.py#L76-L88) and
-`transaction.py:189-194` both guard the fee row with `if fee:`. A fee of exactly
-0 is falsy, so no fee row is rendered on either page. The screen is silent rather
-than showing "Fee: 0". Combined with the ✅ F-01 output-value override, an attacker
-could drive the displayed fee to exactly zero and remove the row instead of
-showing an implausible number. That amplification is closed with ✅ F-01; the
-falsy-fee row suppression is unchanged and still hides a genuine zero fee.
+[transaction.py:68](../../src/gui/screens/transaction.py#L68) and
+[transaction.py:151](../../src/gui/screens/transaction.py#L151) both guard the
+fee row with `if meta.get("fee"):`. `0` is falsy, so a fee of exactly zero
+renders no fee row on either page. The screen is silent rather than showing
+"Fee: 0". A genuine zero fee is therefore indistinguishable from a transaction
+whose fee the screen simply chose not to draw, and any future defect that lets
+an attacker drive the displayed fee to exactly zero removes the row rather than
+showing an implausible number.
+
+**Action.** Change both to `if "fee" in meta:`. Fix together with F-24 item 4.
 
 ### H-06: Confirmation results are compared by identity rather than truthiness
 
@@ -3638,6 +4794,19 @@ so a `None` return proceeds as though the user had confirmed:
 `show_screen` return `None` today, so this is a latent fail-open pattern rather
 than a live defect. It does sit on the message-signing confirmation, which F-17
 turns into the firmware-authorization confirmation.
+
+**Code at this tree.** `grep -rn "is False" src/` returns exactly the four
+sites listed, plus one correct one:
+
+```text
+src/keystore/flash.py:235               if res is False:
+src/keystore/sdcard.py:81               if res is False:
+src/apps/label.py:41                    if res is False:
+src/apps/signmessage/signmessage.py:74  if res is False:
+src/hosts/usb.py:78                     if res is None or res is False:   # correct
+```
+
+**Action.** Replace the four with `if not res:`.
 
 ### H-08: Bytewords decoding does no range validation on input characters
 
@@ -3662,8 +4831,29 @@ a control character — returns a **negative** value. The computed index into th
 
 So different QR strings can decode to the same bytes, and non-alphabetic garbage
 can decode "successfully". With F-28 removing the CRC check, nothing downstream
-catches it. Fix: check that each character is in `[A-Za-z]` and that the table
-entry is `>= 0` before use.
+catches it.
+
+**Code at this tree.**
+[bytewords.py:44-46](../../f469-disco/libs/common/microur/util/bytewords.py#L44-L46)
+has `_minus_aA` with no range check, and the `LOOKUP_TABLE` index at
+[bytewords.py:56-99](../../f469-disco/libs/common/microur/util/bytewords.py#L56-L99)
+is unguarded.
+
+**Action.**
+
+```python
+def _minus_aA(b):
+    if 65 <= b <= 90:
+        return b - 65
+    if 97 <= b <= 122:
+        return b - 97
+    raise ValueError("Invalid byteword character: %d" % b)
+...
+idx = buf[1] * ALPHABET_LEN + buf[0]
+entry = LOOKUP_TABLE[idx]        # idx now provably in 0..675
+if entry < 0:
+    raise ValueError("Invalid byteword pair")
+```
 
 ### H-09: Two bugs in the exported `nonce_function_default` wrapper
 
@@ -3704,6 +4894,28 @@ RFC6979. The low-R grinding loop passes `counter.to_bytes(32,"little")` as
 RFC6979 extra entropy, which is standard BIP-62 / Bitcoin Core behavior, and caps
 at 200 attempts. No host-controlled data reaches nonce derivation.
 
+**Code at this tree.**
+[libsecp256k1.c:328-343](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L328-L343)
+reads `algo16` from `args[0]` and casts a non-buffer `args[3]` to a raw
+pointer. Not reachable — no caller in `src/` or `embit`.
+
+**Action.**
+
+```c
+if(args[2] != mp_const_none){
+    mp_buffer_info_t algbuf;
+    mp_get_buffer_raise(args[2], &algbuf, MP_BUFFER_READ);   /* was args[0] */
+    if(algbuf.len != 16){ mp_raise_ValueError("algo16 must be 16 bytes"); }
+    algo16 = algbuf.buf;
+}
+if(n_args > 3 && args[3] != mp_const_none){
+    mp_buffer_info_t databuf;
+    mp_get_buffer_raise(args[3], &databuf, MP_BUFFER_READ);  /* raise, never cast */
+    if(databuf.len != 32){ mp_raise_ValueError("data must be 32 bytes"); }
+    data = databuf.buf;
+}
+```
+
 ### H-10: The secure-channel IV is not advanced or reset after a failed round trip
 
 [securechannel.py:178-190](../../src/keystore/javacard/applets/securechannel.py#L178-L190):
@@ -3725,9 +4937,29 @@ a 16-byte prefix. Command plaintexts are structured (`\x03\x01` || sha256(pin),
 `\x05\x00`, and so on), so the leak is a prefix-equality oracle on PIN hashes for
 an attacker who can both induce the failure and observe the line.
 
-Cross-counter replay is blocked, because the MAC covers `iv || ct`. Fix: on any
-`SecureChannelError`, set `is_open = False` and force a fresh `open()` before the
-next request.
+Cross-counter replay is blocked, because the MAC covers `iv || ct`.
+
+**Code at this tree.** In
+[securechannel.py:180-195](../../src/keystore/javacard/applets/securechannel.py#L180-L195),
+`self.iv += 1` is on line 192, after `self.decrypt(res)` on line 191, so a raise
+leaves both `iv` and `is_open` untouched.
+
+**Action.**
+
+```python
+def request(self, data):
+    if self.iv >= 2 ** 16 or not self.is_open:
+        self.open()
+    ct = self.encrypt(data)
+    try:
+        res = self.applet.request(self.SECURE_MSG + encode(ct))
+        plaintext = self.decrypt(res)
+    except Exception:
+        self.is_open = False      # force renegotiation, never reuse this IV
+        raise
+    self.iv += 1
+    ...
+```
 
 ### H-11: The mnemonic backup filename defaults to the first BIP-39 word
 
@@ -3749,7 +4981,18 @@ least resistance, publishes word 1 of their seed in the FAT directory entry of a
 removable card. FAT directory entries also survive deletion; `os.remove` does not
 scrub them.
 
-Fix: default the filename to the fingerprint or to a counter.
+**Code at this tree.** Three sites:
+
+```text
+src/keystore/flash.py:223   filename = await self.get_input(suggestion=self.mnemonic.split()[0])
+src/keystore/sdcard.py:66   filename = await self.get_input(suggestion=self.mnemonic.split()[0])
+src/keystore/ram.py:402     fname = "%s.txt" % self.mnemonic.split()[0]
+```
+
+**Action.** Default to the fingerprint:
+`suggestion=hexlify(self.fingerprint).decode()`. The encrypted-save path
+(`flash.py:223`, `sdcard.py:66`) is the one that matters — it currently
+publishes seed word 1 in a FAT directory entry on removable media.
 
 ### H-12: The network file is unauthenticated and is read before unlock
 
@@ -3769,6 +5012,16 @@ Anyone who can write internal flash can change the active network. Impact is
 bounded, because the network name is shown in the GUI and address prefixes change
 visibly. It is still unauthenticated security-relevant state whose failure mode
 defaults to mainnet.
+
+**Code at this tree.**
+[specter.py:405-411](../../src/specter.py#L405-L411) uses a bare `open()`, and
+[specter.py:393-395](../../src/specter.py#L393-L395) silently falls back to
+mainnet on garbage input.
+
+**Action.** Route through `load_aead`/`save_aead` under `keystore.settings_key`
+like every other setting, and move the read after `unlock()`. If a pre-unlock
+network hint is genuinely needed, treat it as untrusted display state and
+re-derive the authoritative value after unlock.
 
 ### H-13: All UR cross-part validation is written with bare `assert`
 
@@ -3791,9 +5044,25 @@ same Makefile affects C `assert()`, not Python asserts.
 The finding is fragility. The entire hostile-input validation layer of the
 device's largest host-facing parser is one build flag (`mpy-cross -O`) away from
 disappearing silently, and no test would catch it. That makes it one of the better
-hiding places in this codebase for a malicious maintainer. Fix: replace
-security-relevant asserts with explicit `raise`, and add a build-time or
-boot-time check that `__debug__` is True.
+hiding places in this codebase for a malicious maintainer.
+
+**Code at this tree.** `grep -n "assert" decoder.py` returns 12 hits covering
+`ur_type`, `seq_num`, `seq_len`, `msg_len`, `checksum`, `payload_len`, the
+`readinto` length, and the part-set completeness check. The build does not
+currently strip them:
+[ports/stm32/Makefile:142](../../f469-disco/micropython/ports/stm32/Makefile#L142)
+sets `MPY_CROSS_FLAGS = -march=armv7m` only, and `grep -rn "mpy-cross" Makefile
+build_firmware.sh` shows no `-O` flag anywhere.
+
+**Action.** Convert every security-relevant `assert` in `microur` to an explicit
+`raise URError(...)`, and add a boot-time tripwire so the invariant cannot
+silently regress:
+
+```python
+# main.py, early
+if not __debug__:
+    raise RuntimeError("Firmware built with asserts stripped - refusing to run")
+```
 
 ### H-14: Keystore backend naming and a destructive no-PIN fallback
 
@@ -3816,6 +5085,31 @@ Two related storage-layer notes.
    then finds `enc_secret is None` and overwrites `/flash/keystore/enc_secret`
    with a fresh random key, permanently destroying any seed previously stored on
    flash or SD. See also F-07 and F-22.
+
+**Code at this tree.**
+[sdcard.py:21](../../src/keystore/sdcard.py#L21) has
+`NAME = "Internal storage"`, identical to
+[flash.py:29](../../src/keystore/flash.py#L29). `Specter.select_keystore` at
+[specter.py:97-113](../../src/specter.py#L97-L113) takes the first available
+backend, `MemoryCard.is_available()` swallows every fault, and `_set_pin` at
+[flash.py:182-186](../../src/keystore/flash.py#L182-L186) overwrites
+`enc_secret` with fresh randomness when it finds `None`.
+
+**Action.**
+
+1. Rename: `SDKeyStore.NAME = "SD card"`.
+2. Before `setup_pin()` on a device that has a smartcard-era `enc_secret` or any
+   stored seed, require an explicit destructive-action confirmation:
+
+   ```python
+   if self.has_stored_seed() and self.enc_secret is None:
+       if not await show_screen(Prompt(
+               "WARNING",
+               "Setting a new PIN here will PERMANENTLY DESTROY the seed "
+               "stored on this device. Continue?")):
+           raise KeyStoreError("Aborted")
+   ```
+3. Announce backend fallback on screen rather than switching silently.
 
 ### H-15: Three small robustness items
 
@@ -3859,7 +5153,32 @@ depth > 255, so there is **no** one-byte depth wraparound producing a forged
 10. Reachable through F-05, which needs no confirmation.
 
 Item 1 belongs to this repository, item 2 to bundled `microur`, and item 3 to
-vendored `embit`.
+the `embit` submodule.
+
+**Code at this tree.**
+
+1. [flash.py:178](../../src/keystore/flash.py#L178) passes a `str`, while
+   [flash.py:128](../../src/keystore/flash.py#L128) passes `bytes`.
+2. [util/ur.py:9-25](../../f469-disco/libs/common/microur/util/ur.py#L9-L25)
+   parses `seq_len` with no upper bound.
+3. [bip32.py:292-299](../../f469-disco/libs/common/embit/src/embit/bip32.py#L292-L299)
+   returns `[_parse_der_item(e) for e in arr]` with no cap.
+
+**Action.**
+
+1. `self.pin = hmac.new(key=key, msg=pin.encode(), digestmod="sha256").digest()`.
+2. `if seq_len < 1 or seq_len > 1000: raise URError("Invalid seq_len")`.
+3. Cap depth in `parse_path`:
+
+   ```python
+   MAX_DERIVATION_DEPTH = 10
+   if len(arr) > MAX_DERIVATION_DEPTH:
+       raise ValueError("Derivation path too deep: %d" % len(arr))
+   ```
+
+   Reachable through F-05, which needs no confirmation, so enforce it in
+   [xpubs.py](../../src/apps/xpubs/xpubs.py) too rather than relying on the
+   dependency.
 
 ### H-16: The rangeproof rewind arena bound uses an ABI-mismatched length
 
@@ -3881,9 +5200,19 @@ there.
 This broken check is not currently an overflow. The fixed arena carve-outs total
 about 33.5 KiB against the 1 MiB SDRAM arena, independent of hostile input. A
 wrong bound can fail closed as `RewindError`, or pass for the wrong reason, but
-it cannot make the current fixed carve-outs exceed the real arena. Use one
-`size_t` type, include the public declaration where the definition compiles, and
-restore warnings-as-errors for this user module.
+it cannot make the current fixed carve-outs exceed the real arena.
+
+**Code at this tree.**
+[rangeproof_preallocated.h:9-13](../../f469-disco/usermods/secp256k1/mpy/config/rangeproof_preallocated/rangeproof_preallocated.h#L9-L13)
+declares `uint64_t allocated_len`;
+[rangeproof_preallocated_impl.h:491-495](../../f469-disco/usermods/secp256k1/mpy/config/rangeproof_preallocated/rangeproof_preallocated_impl.h#L491-L495)
+defines `intptr_t allocated_len`. Separate translation units, so no diagnostic.
+
+**Action.** Use one type (`size_t`) in both, `#include` the public declaration
+in the translation unit that compiles the definition so the compiler can
+diagnose future drift, and restore warnings-as-errors for this user module. Fix
+this **before** F-31, since F-31's proposed arena bound relies on this parameter
+being read correctly.
 
 ### H-17: Unreachable surjection-proof copy loops scale their index twice
 
@@ -3898,8 +5227,17 @@ allocation. The allocation is also unchecked, and non-buffer objects are cast to
 
 PATH-20 establishes that production code never enters these branches: in-tree
 callers pass joined `bytes`, and the list-argument call sites are commented out.
-Fix the indexing to `ptr + i`, validate the list type, and handle allocation
-failure before any future caller can make the defect reachable.
+
+**Code at this tree.**
+[libsecp256k1.c:1300-1304](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1300-L1304)
+and the equivalent code at `:1376-1380` and `:1438-1442` add
+`i * element_size` to an already typed pointer. Not reachable — the
+list-argument call sites are commented out at
+[liquid/manager.py:441-454](../../src/apps/wallets/liquid/manager.py#L441-L454).
+
+**Action.** Change `ptr + i * element_size` to `ptr + i`, check the `gc_alloc`
+result before use, and validate the argument is actually a list before casting
+to `mp_obj_list_t`.
 
 ### H-18: Every QR payload is printed to stdout unconditionally
 
@@ -3911,8 +5249,18 @@ entropy, and the SLIP77 master blinding private key.
 
 On a correctly booted production image the sink is inert: this board has no UART
 REPL, and `boot.py` clears both dupterm slots. It becomes live in the debug image
-and in F-32's boot-failure state, where the CDC REPL stays attached. Delete the
-print, or gate it explicitly behind `platform.simulator`.
+and in F-32's boot-failure state, where the CDC REPL stays attached.
+
+**Code at this tree.**
+[qrcode.py:290-292](../../src/gui/components/qrcode.py#L290-L292), plus a second
+instance at [qr.py:553](../../src/hosts/qr.py#L553) (`print(prefix)`).
+
+**Action.** Delete both, or gate them:
+
+```python
+if platform.simulator:
+    print(text)
+```
 
 ### H-19: Host-supplied wallet names reach a recolor-enabled label
 
@@ -3928,8 +5276,34 @@ address-verification screen is reachable from both `VERIFY_ADDRESS` and
 The impact is bounded to recoloring or hiding wallet-name title text. The address
 itself uses a non-recolored message label, LVGL's parser only copies a complete
 six-character color parameter it has already traversed, and the initial import
-screen displays the name without recolor. Strip `#` and control characters and
-bound the name, or render the edit glyph in a separate styled label.
+screen displays the name without recolor.
+
+**Code at this tree.**
+[wallet.py:294-302](../../src/apps/wallets/wallet.py#L294-L302) strips the
+checksum from the descriptor half only:
+
+```python
+name = "Untitled"
+if "&" in desc:
+    arr = desc.split("&")
+    desc = arr[-1]
+    name = "&".join(arr[:-1])      # host-controlled, unsanitized
+```
+
+`desc.split("#")[0]` on line 308 sanitizes the descriptor, not the name.
+
+**Action.**
+
+```python
+def _sanitize_name(name):
+    name = "".join(c for c in name if 0x20 <= ord(c) <= 0x7E and c != "#")
+    return name[:32] or "Untitled"
+...
+w.name = _sanitize_name(name)
+```
+
+Or render the edit glyph in a separate styled label so the title does not need
+recolor enabled at all.
 
 ### H-20: Two fail-closed start-up-code robustness defects
 
@@ -3951,8 +5325,21 @@ authorization result depends on the read. Guard `selected >= 0` before the loop.
 [bl_syscalls.c:396-402](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L396-L402)).
 An already forged integrity record can make CRC verification walk past flash and
 bus-fault, but forging that record already requires F-25's flash-write
-prerequisite. Bound `pl_size` against the selected section in shared integrity
-verification code.
+prerequisite.
+
+**Code at this tree.** The out-of-bounds `version[selected]` read is at
+[startup.c:209-244](../../bootloader/platforms/stm32f469disco/startup/startup.c#L209-L244)
+and the unguarded `blsys_flash_read`/`blsys_flash_crc32` at
+[startup.c:47-61](../../bootloader/platforms/stm32f469disco/startup/startup.c#L47-L61).
+Both end in a halt, not attacker-controlled execution.
+
+**Action.**
+
+1. `if (selected < 0) { fatal_error("No valid bootloader copy"); }` before the
+   fallback loop.
+2. Add `check_flash_area()` to the start-up flash syscalls, matching
+   [bl_syscalls.c:396-402](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L396-L402),
+   and bound `pl_size` against the selected section in shared integrity code.
 
 ### H-21: The GUI blinding-key export displays the private key without confirmation
 
@@ -3967,8 +5354,25 @@ path does provide an explicit warning and confirmation.
 
 Severity is Low, because this key grants unblinding and privacy loss rather than
 spending authority, and the GUI path requires physical use of an unlocked device.
-Reuse the host path's warning and require PIN re-entry before display, as mnemonic
-display does. H-18 records the additional stdout sink.
+H-18 records the additional stdout sink.
+
+**Code at this tree.**
+[blindingkeys/app.py:31-36](../../src/apps/blindingkeys/app.py#L31-L36) renders
+the key immediately:
+
+```python
+async def menu(self, show_screen, show_all=False):
+    await show_screen(QRAlert("Standard SLIP-77 blinding key",
+            self.keystore.slip77_key.wif(NETWORKS[self.network]),
+            note="Blinding private key allows your software wallet\nto track your balance."))
+    return False
+```
+
+No `Prompt`, no warning, no cancel path, no PIN re-entry — in contrast to the
+same app's host path, which does prompt.
+
+**Action.** Gate the GUI path on the same prompt the host path uses, and require
+PIN re-entry before display, matching how mnemonic display is handled.
 
 ### H-22: The STM32 fork removed `-Wall` while keeping `-Werror`
 
@@ -3979,9 +5383,20 @@ This silently disables warning classes across the interpreter, the STM32 HAL, an
 all user C modules. H-23's operator-precedence defect is exactly the
 `-Wparentheses` class that `-Wall -Werror` would have rejected.
 
-Restore `-Wall`, preferably also `-Wextra`, and fix the resulting diagnostics
-under the release compiler. This is build-assurance debt rather than a separate
-exploitation primitive.
+**Code at this tree.**
+[ports/stm32/Makefile:93](../../f469-disco/micropython/ports/stm32/Makefile#L93):
+
+```make
+CFLAGS = $(INC) -Wpointer-arith -Werror -std=gnu99 -nostdlib $(CFLAGS_MOD) $(CFLAGS_EXTRA)
+```
+
+No `-Wall`, no `-Wextra`.
+
+**Action.** Restore `-Wall` (ideally `-Wextra`) and work through the resulting
+diagnostics under the release compiler. Expect H-23 (`-Wparentheses`) and
+possibly F-34 to surface immediately. Stage it: add `-Wall -Wno-error=...` for
+the noisy categories first, then tighten. This is build-assurance debt rather
+than a separate exploitation primitive.
 
 ### H-23: Smartcard PPS checksum validation accepts 255 of 256 values
 
@@ -3997,8 +5412,19 @@ of accepting only the correct `0xFE`
 ([t1_protocol.c:1020-1030](../../f469-disco/usermods/scard/t1_protocol/t1_protocol.c#L1020-L1030)).
 A hostile or corrupted card can therefore advance protocol negotiation with an
 invalid checksum. No memory-safety, secret-release, or funds path was shown from
-the negotiated state. Parenthesize the XOR expression and add positive and
-negative PPS vectors.
+the negotiated state.
+
+**Code at this tree.**
+[t1_protocol.c:1020-1030](../../f469-disco/usermods/scard/t1_protocol/t1_protocol.c#L1020-L1030)
+holds the unparenthesized expression.
+
+**Action.**
+
+```c
+0U == (buf[pps_ppss] ^ buf[pps_pps0] ^ buf[pps_pck])
+```
+
+Add positive and negative PPS test vectors so this cannot regress.
 
 ### H-24: Device wipe unlinks QSPI files but does not erase their blocks
 
@@ -4011,9 +5437,23 @@ physically recoverable. FatFs unlink and reformat do not scrub their contents.
 Most security-sensitive QSPI state is authenticated and usually encrypted under
 keys derived from the internal-flash secret, which wipe does destroy. Residual
 plaintext still includes labels, file names, sizes, existence, and other
-metadata. No mnemonic recovery path was shown from QSPI alone. Either erase the
-full external device, or document and test a cryptographic-erasure model that
-treats all remaining plaintext metadata as intentionally retained.
+metadata. No mnemonic recovery path was shown from QSPI alone.
+
+**Code at this tree.** At
+[platform.py:263-274](../../src/platform.py#L263-L274), internal flash (blocks
+256-447) plus two QSPI blocks are erased; 32,766 QSPI blocks are left.
+
+**Action.** Either erase the full external device —
+
+```python
+for i in range(256, 33216):
+    f.writeblocks(i, os.urandom(block_size))
+    gc.collect()
+```
+
+with a progress screen, since this will take a while — or document and test an
+explicit cryptographic-erasure model that states plaintext QSPI metadata
+(labels, file names, sizes, existence) is intentionally retained.
 
 ### H-25: A Liquid p2pkh output aborts the confirmation screen with an uncaught `IndexError`
 
@@ -4034,6 +5474,13 @@ top-level handler in `src/specter.py:87-93`, which shows an error popup. The
 consequence is a host-triggerable abort of the Liquid signing flow: no
 memory-safety effect, no unauthorized signature, and no device reset. It is the
 same missing `script_type()` gate as F-35, and the same change fixes it.
+
+Same root cause as F-35, on both the encoder and the call site.
+
+**Action.** Fixed by F-35's `script_type()` gate. Additionally wrap
+`LWalletManager.get_address` in the Bitcoin manager's `try/except` so any future
+encoder exception degrades to a labelled hex fallback rather than aborting
+`preprocess_psbt`.
 
 ### H-26: `address_to_scriptpubkey` validates neither payload length nor network, and is unreachable here
 
@@ -4062,9 +5509,94 @@ only when `decode_check` itself fails.
 
 None of this is reachable in this firmware. `Script.from_address` and
 `address_to_scriptpubkey` have no caller in `src/`, `boot/`, or the rest of the
-vendored tree; the device converts descriptors to scripts, never address strings
+`embit` tree; the device converts descriptors to scripts, never address strings
 to scripts. See PATH-37. It is kept here as an upstream hardening item, because
 the code ships on the device and is one import away from becoming reachable.
+
+**Code at this tree.**
+[script.py:174-195](../../f469-disco/libs/common/embit/src/embit/script.py#L174-L195)
+emits a hardcoded `\x14` push regardless of payload length, iterates
+`NETWORKS.values()` with no network parameter, and falls off the end of the loop
+returning `None` rather than raising. The bech32 branch *does* validate `ver`
+and length (lines 188-191) — only the base58 branch is unvalidated. Not
+reachable from this firmware.
+
+**Action.** Upstream hardening only:
+
+```python
+def address_to_scriptpubkey(addr, network=None):
+    nets = [network] if network else list(NETWORKS.values())
+    try:
+        data = base58.decode_check(addr)
+    except Exception:
+        ...  # bech32 branch
+    else:
+        if len(data) != 21:
+            raise EmbitError("Invalid base58 address payload length")
+        prefix = data[:1]
+        for net in nets:
+            if prefix == net["p2pkh"]:
+                return Script(b"\x76\xa9\x14" + data[1:] + b"\x88\xac")
+            elif prefix == net["p2sh"]:
+                return Script(b"\xa9\x14" + data[1:] + b"\x87")
+        raise EmbitError("Unknown address version byte")
+```
+
+Also replace the bare `except:` on line 184 so a base58 failure is
+distinguishable from a bech32 address.
+
+### H-27: The displayed-scope-to-signed-output invariant is enforced only in the dependency
+
+The property that makes the confirmation screen meaningful — that the `(value,
+script_pubkey)` the device *displays* for an output is the one the signature
+*commits to* — is currently enforced in exactly one place: `embit`'s refusal of
+v2-only scope fields inside a v0 PSBT
+([psbt.py:162-163](../../f469-disco/libs/common/embit/src/embit/psbt.py#L162-L163),
+[psbtview.py:352-354](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L352-L354)).
+
+This repository does not check the invariant itself. The wallet manager builds
+confirmation metadata from scope data
+([manager.py:721-768](../../src/apps/wallets/manager.py#L721-L768)) and never
+compares it against the global transaction output that `PSBTView.vout` will
+hash. `grep -rn "script_pubkey" src/apps/wallets/manager.py` returns only the
+two address-rendering sites at
+[manager.py:96-99](../../src/apps/wallets/manager.py#L96-L99).
+
+Nor is the dependency's behaviour pinned by a test here.
+`grep -rln 'PSBTv2\|V2_FIELDS' test/ src/` returns nothing, so a submodule bump
+that regressed the guard would not fail any test in this repository.
+
+Two consequences, neither exploitable today:
+
+1. The device's central display invariant is owned by an upstream project, and
+   this tree tracks that project through a mutable-branch fork pin (§1.2).
+2. There is no defense in depth. Any *future* parser defect that lets scope data
+   diverge from the global transaction — not only the version-field class —
+   reaches the confirmation screen unchecked.
+
+**Action plan**
+
+1. Add the equality check in code this project owns. In
+   [manager.py:721-768](../../src/apps/wallets/manager.py#L721-L768), for each
+   output index `i`:
+
+   ```python
+   gout = psbt.vout(i)                      # authoritative global tx output
+   if out.value != gout.value or out.script_pubkey.data != gout.script_pubkey.data:
+       raise WalletError("Output %d differs from the transaction being signed" % i)
+   ```
+
+   Make the mismatch fatal rather than normalizing it away.
+2. Add the same check on the input side: every scope txid, vout, and sequence
+   must equal the matching global transaction input.
+3. Add regression tests that pin the rejection. Craft v0 PSBTs carrying each
+   v2-only key (`0x03`, `0x04` on outputs; `0x0e`, `0x0f`, `0x10` on inputs) in
+   several field orders, including duplicate `0x0f` records and over-long values
+   for `0x0f` and `0x10`, and assert rejection before confirmation. The existing
+   `test/tests_native/test_change_security.py` is the natural home.
+4. Add an end-to-end test that compares displayed metadata with the signed
+   transaction, including outputs classified as change.
+
 ## 8. Assessment by security domain
 
 ### 8.1 Malware and backdoor assessment
@@ -4188,18 +5720,17 @@ decrypted key material. Only wipe or reboot ends that process lifetime.
 
 ### 8.4 Transaction-signing assessment
 
-At the audited tree the Bitcoin display/signing boundary was broken by ✅ F-01 and
-✅ F-02, critically so by ✅ F-01, which is the attacker-profitable half. ✅ F-02 and
-F-03 break the same boundary in the value-destruction direction, where the loss is
-paid to a miner. F-04 adds a separate signing authorization gap. Normal descriptor
-change ownership re-derives and compares scripts, but it could not defend against
-✅ F-01, because the compared scope script was already attacker-overridden.
+The Bitcoin display/signing boundary is broken in two places, neither of them a
+parser override. F-03 breaks it in the value-destruction direction: an input
+amount that was never authenticated drives the displayed fee, and the loss is
+paid to a miner. F-04 breaks signing authorization itself: a derived key signs
+without any proof that its public key is in the input script.
 
-**Current tree:** ✅ F-01 and ✅ F-02 are fixed, so the scope the device displays is
-once again the scope the global transaction carries, and the change-ownership
-comparison is no longer undermined. **F-03 and F-04 are unchanged**, so this
-boundary is still broken — by a discarded verification result and by a signing
-oracle rather than by a parser override. The assessment below stands for those two.
+The scope the device displays is the scope the global transaction carries —
+`embit` rejects v2-only scope fields in a v0 PSBT — but that invariant lives
+entirely in the dependency and is pinned by no test here (H-27). Descriptor
+change ownership re-derives and compares scripts and is sound as long as the
+scope it compares is authentic (PATH-02).
 
 A user can also approve a descriptor that contains an attacker key. The descriptor
 confirmation identifies device, external, and NUMS keys, but it cannot protect a
@@ -4236,10 +5767,9 @@ diverge. On Bitcoin the correspondence holds inside the encoder: the displayed
 string is derived from the parsed `script_pubkey` and from nothing else, no PSBT
 record carries an address, and the encoding is deterministic and gated by exact
 script-type matching (PATH-39, PATH-35, PATH-34). What breaks the correspondence
-on Bitcoin was ✅ F-01 and ✅ F-02 substituting the *scope* that is displayed, plus
-F-24 and F-19 governing whether the string is on screen at the moment of
-confirmation. With the scope substitution fixed, F-24 and F-19 are what remain.
-The encoder itself is sound.
+on Bitcoin is not the encoder but F-24 and F-19, which govern whether the
+string is on screen at the moment of confirmation. The encoder itself is
+sound.
 
 On Liquid the encoder breaks it. F-35 makes the mapping from scriptPubKey to
 confidential address neither injective nor total, so an address the user verified
@@ -4284,11 +5814,10 @@ not the host's. `Wallet.get_descriptor` bounds both the branch index and the
 derivation index (`0 <= idx < 0x80000000`). `Wallet.from_descriptor` strips
 everything after the first `#`, so the descriptor half cannot carry LVGL recolor
 markup. The separate host-supplied wallet name is not sanitized and reaches a
-recolor-enabled title, which is H-19. This ownership mechanism is sound and is
-defeated only by ✅ F-01, which corrupted the scope being compared rather than the
-comparison itself — and ✅ F-01 is fixed, so that defeat no longer applies. This is
-not a conclusion about the full descriptor, script, Miniscript, or TapTree parser
-surface.
+recolor-enabled title, which is H-19. This ownership mechanism is sound, and its
+one structural dependency is that the scope it compares against is authentic —
+which is the invariant H-27 covers. This is not a conclusion about the full
+descriptor, script, Miniscript, or TapTree parser surface.
 
 A second parser that **holds** is Bitcoin address encoding. `bech32.py` is the
 BIP-173/350 reference implementation with all four validity checks intact, and it
@@ -4354,10 +5883,12 @@ review.
 
 ### 8.7 Build and supply-chain assessment
 
-Submodule gitlinks are immutable and match the reviewed checkouts. No
-`.gitmodules` branch setting exists. Relative MicroPython URLs make the effective
-origin depend on the parent clone origin, but they do not make the pinned commit
-mutable.
+Submodule gitlinks are immutable and match the reviewed checkouts, so a normal
+recursive clone or `git submodule update` gets exactly the code reviewed here.
+Against that, six `branch =` declarations exist and six of eight submodule URLs
+point at forks rather than upstream projects. That is not an exploitable
+weakening of the pin, but it enables `--remote` drift and leaves upstream
+equivalence unestablished for those six trees. See §1.2.
 
 Material gaps and hardening items:
 
@@ -4365,11 +5896,14 @@ Material gaps and hardening items:
 - bootloader key selection recorded nowhere in the build output, and RDP1 as the
   documented default (F-08);
 - a MicroPython base branched in 2019 (D-01), flattened native dependencies with
-  no recoverable upstream pins (D-02), an obsolete release-tool `cryptography` pin
-  (D-03), and an LVGL pin from the same year;
+  no recoverable upstream pins (D-02), a release-tool `cryptography` pin from
+  2021 (D-03), and an LVGL pin from 2019;
+- `branch =` declarations and fork URLs across the recursive submodule
+  configuration, with no CI assertion that release builds avoid `--remote`
+  (§1.2);
 - no CI workflow, `CODEOWNERS`, or release-attestation mechanism at this tree;
 - no empirical reproducibility check: two clean Docker builds were not compared
-  with each other or with the official v1.9.0 release binaries.
+  with each other or with any official release binary.
 
 ### 8.8 Physical-attack assessment
 
@@ -4419,8 +5953,19 @@ strings, as intended. No fork-only commit reverts an upstream security check.
 
 The remaining assurance issue is age, not unread local history. Interpreter,
 filesystem, USB, crypto, and parser fixes made upstream since the v1.12-era base
-are absent unless separately backported. Rebase, or maintain an explicit backport
-and advisory ledger and require security review for each fork-only change.
+are absent unless separately backported.
+
+**State at this tree.** `f469-disco/micropython` is pinned at
+`6bdf1b69162b673d48042ccd021f9efa019091fa` (2022-11-07), `git describe` →
+`v1.10-1185-g6bdf1b691`, merge-base `10709846f` (`v1.12-35`, December 2019).
+There is no rebase and no backport ledger in the tree. The submodule URL points
+at a fork under `hardware-wallets-and-cryptography/` — see §1.2.
+
+**Action.** Rebase onto a current MicroPython, or maintain an explicit backport
+and advisory ledger under `docs-my/` and require security review for each
+fork-only change. Start by triaging upstream interpreter, VFS, USB, and
+`objstr`/`unicode` fixes since v1.12 — the last of those is directly relevant to
+F-21.
 
 #### D-02: Flattened MicroPython third-party trees have no recoverable upstream pins
 
@@ -4433,11 +5978,17 @@ submodule pins, added roughly 8.6 million lines in-tree, and left an empty
 `lib/tinyusb`, `lib/mbedtls`, and `lib/lwip`. Most retain no upstream commit
 identifier.
 
-The outer repository gitlinks stay immutable and resolved. The limitation is
-inside the pinned MicroPython tree: native SDMMC, USB, QSPI, crypto, and network
-code cannot be reproduced or diffed against an identified upstream revision.
-Record a source and commit for every flattened tree, or restore submodules, then
-verify each vendored tree automatically.
+The limitation is inside the pinned MicroPython tree: native SDMMC, USB, QSPI,
+crypto, and network code cannot be reproduced or diffed against an identified
+upstream revision.
+
+**State at this tree.** `lib/stm32lib`, `lib/tinyusb`, `lib/mbedtls`, and
+`lib/lwip` are in-tree with an empty `.gitmodules` and no upstream commit
+identifiers.
+
+**Action.** Record a source URL and commit SHA for every flattened tree in a
+manifest file, or restore the submodules. Then add a CI job that re-verifies
+each vendored tree against its recorded revision.
 
 #### D-03: Release tooling pins an obsolete `cryptography` package
 
@@ -4445,102 +5996,340 @@ verify each vendored tree automatically.
 **Owning codebase:** The bootloader tools dependency lock consumed by this
 repository.
 
-`bootloader/tools/requirements.txt` pins `cryptography==3.3.2`, and the Docker
-build installs that lock before running upgrade assembly and signature-import
-tools. The version predates several published memory-safety and parser fixes.
+[bootloader/tools/requirements.txt:92](../../bootloader/tools/requirements.txt#L92)
+pins `cryptography==3.4.8`, hash-locked, and the Dockerfile installs that lock
+with `--require-hashes` before running upgrade assembly and signature tools.
+3.4.8 dates from August 2021 and predates several published advisories in
+`cryptography` and its bundled OpenSSL.
 
 No untrusted input reaching a vulnerable API in this release flow was shown, so
-this is dependency exposure rather than a product vulnerability. Refresh the
-hash-locked requirements, verify the signing tools against the newer package, and
-add scheduled advisory checks.
+this is dependency exposure rather than a product vulnerability.
+
+**Action.** Regenerate the hash-locked requirements against a current
+`cryptography`, verify `upgrade-generator.py`, `make-initial-firmware.py`, and
+the new `introspect-binary.py` against it, and add a scheduled advisory check
+(`pip-audit` in CI) so the pin does not silently age again.
 
 ### 8.10 Security-model discrepancies
 
-The repository has no separate current threat-model document. The dedicated
-security-model statement audited here is `docs/security.md` at tag `v1.9.0` —
-44 lines, last changed in 2021, readable with `git show v1.9.0:docs/security.md`.
-That file is **not** present in the current tree: it was replaced by a rewritten
-361-line [docs/security-info.md](../../docs/security-info.md). Each
-`docs/security.md:N` citation below names line N of the *audited* document, while
-its link targets the replacement, whose line numbering does not correspond. The
-table has not been re-run against the replacement text; see AD-01 and AD-03 in
-[audit-comparison.md](audit-comparison.md).
+This subsection compares [docs/security-info.md](../../docs/security-info.md),
+the repository's user-facing security statement, against the implementation.
+Each independently testable clause is one `SM-xx` claim.
 
-The comparison below treats each independently testable clause or bullet as a
-claim.
-
-- **Confirmed** means the current implementation enforces or implements the
-  claim.
+- **Confirmed** means the implementation enforces or implements the claim.
 - **Qualified** means the mechanism exists but the claim omits a material
   condition.
-- **Contradicted** means current code provides a counterexample.
+- **Contradicted** means the code provides a counterexample.
 
-Hardware properties outside the fetched source are marked as such rather than
-inferred.
+Hardware properties outside the source are marked as such rather than inferred.
+
+Result: **23 Confirmed, 12 Qualified, 7 Contradicted** across 42 claims. The
+document is markedly more accurate and more self-critical than most such
+documents — it names its own PIN off-by-one, its lack of key stretching, and
+its unencrypted device secret.
+
+Four of the seven contradictions are concentrated in one section,
+"Transaction verification", and they share a single cause that is not a
+documentation error: **the document was carried over from `origin/master` and
+describes `origin/master`'s wallet manager, while this branch carries the older
+one** (§1.3). SM-34, SM-35, SM-37, and SM-38 are all that gap. They are
+recorded as DOC-02 and DOC-03, and the cheapest fix for both is a cherry-pick,
+not a rewrite. DOC-01 is a genuine documentation defect and is present on
+`origin/master` as well.
 
 | ID | Documented claim | Result | Implementation comparison |
 | --- | --- | --- | --- |
-| SM-01 | The application MCU controls the display ([docs/security.md:5](../../docs/security-info.md)). | Confirmed | Production startup imports the native display module and initializes it before the application and SDRAM ([src/main.py:13](../../src/main.py#L13), [src/main.py:21-22](../../src/main.py#L21-L22)). The STM32 user module drives the LCD through LVGL and the board support package ([display.c](../../f469-disco/usermods/udisplay_f469/display.c)). |
-| SM-02 | Secure-element integration "is not there yet" ([docs/security.md:7](../../docs/security-info.md)). | Contradicted; obsolete | The default keystore order includes `MemoryCard` before `SDKeyStore` ([src/main.py:53-62](../../src/main.py#L53-L62)). `MemoryCard` connects to a JavaCard applet, opens a secure channel, delegates PIN state to it, and stores mnemonic entropy on it ([memorycard.py:17-45](../../src/keystore/memorycard.py#L17-L45), [memorycard.py:300-332](../../src/keystore/memorycard.py#L300-L332)). The applet itself is outside this repository, but the integration is present. |
-| SM-03 | Secrets are stored on the main MCU ([docs/security.md:7](../../docs/security-info.md)). | Qualified; obsolete as a complete description | The device secret stays in internal flash ([ram.py:130-163](../../src/keystore/ram.py#L130-L163)), and unlocked roots live in MCU RAM. The mnemonic may instead be stored encrypted in MCU flash or on SD ([flash.py:18-25](../../src/keystore/flash.py#L18-L25), [sdcard.py:10-18](../../src/keystore/sdcard.py#L10-L18)), or as entropy on a smartcard ([memorycard.py:227-292](../../src/keystore/memorycard.py#L227-L292)). |
-| SM-04 | The wallet can be used without persisting the recovery phrase, by entering it each session ([docs/security.md:7](../../docs/security-info.md)). | Confirmed | `FlashKeyStore` starts in amnesic mode and persists a mnemonic only through the explicit storage operation ([flash.py:18-25](../../src/keystore/flash.py#L18-L25)). Loading a mnemonic builds the root in memory ([ram.py:54-72](../../src/keystore/ram.py#L54-L72)). |
-| SM-05 | Some files are stored on external QSPI flash ([docs/security.md:9](../../docs/security-info.md)). | Confirmed | Host and global settings are placed below `/qspi` ([src/main.py:33-36](../../src/main.py#L33-L36)), and app state, including wallets, is instantiated under `/qspi/<app>` ([helpers.py:108-121](../../src/helpers.py#L108-L121)). |
-| SM-06 | All user files on QSPI are signed and checked when loaded ([docs/security.md:9](../../docs/security-info.md)). | Contradicted; security-critical counterexample | Wallet descriptors and metadata and host/global settings use HMAC/AEAD helpers ([helpers.py:69-105](../../src/helpers.py#L69-L105), [wallet.py:109-121](../../src/apps/wallets/wallet.py#L109-L121), [hosts/core.py:68-84](../../src/hosts/core.py#L68-L84)), while the label is plaintext ([label.py:49-60](../../src/apps/label.py#L49-L60)). More importantly, F-15 shows that ordinary MicroPython import executes `/qspi/config.py` before PIN entry with no HMAC or signature check. The universal claim is false for both low-impact data and executable code. |
-| SM-07 | QR image processing happens on a separate scanner microcontroller ([docs/security.md:11](../../docs/security-info.md)). | Qualified; boundary confirmed, scanner internals not verifiable | The security-critical MCU configures an external scanner and receives decoded payload bytes over UART ([qr.py:13-27](../../src/hosts/qr.py#L13-L27), [qr.py:59-85](../../src/hosts/qr.py#L59-L85), [qr.py:110-120](../../src/hosts/qr.py#L110-L120)). No image-processing path exists in the application firmware. The external scanner firmware is not in the repository, so the stronger statement that *all* image processing happens there cannot be inspected. |
-| SM-08 | USB and SD are managed by the main MCU and increase its attack surface ([docs/security.md:11](../../docs/security-info.md)). | Confirmed | SD is mounted through `pyb.SDCard` on the STM32 ([platform.py:42-101](../../src/platform.py#L42-L101), [platform.py:109-118](../../src/platform.py#L109-L118), [src/main.py:33-41](../../src/main.py#L33-L41)). USB uses the MCU's `pyb.USB_VCP` and `pyb.usb_mode` ([usb.py:21-39](../../src/hosts/usb.py#L21-L39), [platform.py:207-239](../../src/platform.py#L207-L239)). |
-| SM-09 | First boot generates a unique MCU secret ([docs/security.md:15](../../docs/security-info.md)). | Confirmed, with regeneration semantics | The keystore path is internal flash ([src/main.py:53-55](../../src/main.py#L53-L55)). A missing or unreadable `secret` file causes generation and persistence of 32 random bytes ([ram.py:130-163](../../src/keystore/ram.py#L130-L163)), so this also happens after erasure or a read failure, not only on literal first boot. |
-| SM-10 | Stable PIN-entry words let the user detect device replacement ([docs/security.md:15](../../docs/security-info.md)). | Qualified and overstated as a guarantee | Flash mode derives each word from the internal secret and the entered PIN prefix ([ram.py:165-175](../../src/keystore/ram.py#L165-L175)). Smartcard mode also binds the card public key ([memorycard.py:66-86](../../src/keystore/memorycard.py#L66-L86)). Detection depends on the user remembering and checking the words, and on the PIN screen appearing. A substituted card can report itself unlocked and suppress that screen entirely (F-22). |
-| SM-11 | The PIN and the unique secret derive the decryption key for stored Bitcoin keys ([docs/security.md:17](../../docs/security-info.md)). | Confirmed only for flash and SD storage | `FlashKeyStore` derives `pin_secret` from the concatenated device secret and PIN, unwraps `enc_secret`, and uses that key for stored mnemonics ([flash.py:109-150](../../src/keystore/flash.py#L109-L150), [flash.py:174-186](../../src/keystore/flash.py#L174-L186), [sdcard.py:86-91](../../src/keystore/sdcard.py#L86-L91), [sdcard.py:110-129](../../src/keystore/sdcard.py#L110-L129)). Smartcard mode delegates PIN enforcement to the card and allows either device-bound encryption or a constant-key portable format ([memorycard.py:112-130](../../src/keystore/memorycard.py#L112-L130), [memorycard.py:155-203](../../src/keystore/memorycard.py#L155-L203), [memorycard.py:248-263](../../src/keystore/memorycard.py#L248-L263)). |
-| SM-12 | Bypassing the PIN screen still cannot decrypt the Bitcoin keys ([docs/security.md:17](../../docs/security-info.md)). | Qualified; true for genuine flash ciphertext, incomplete as a system-wide guarantee | A UI-only bypass does not produce the flash `pin_secret`, so genuine flash ciphertext stays protected. In smartcard mode, lock state and attempts are card assertions. A hostile card can report `PIN_UNLOCKED`, skip the PIN screen, and supply an attacker-chosen portable seed blob (F-22). That does not decrypt a genuine encrypted card blob, but it lets a PIN-screen bypass change the active spending keys. |
-| SM-13 | Locking firmware also locks the device secret, and flashing different firmware erases it and changes the words ([docs/security.md:19](../../docs/security-info.md)). | Conditional, not an unconditional firmware-authentication property | The release script requests RDP1 and write protection ([build_firmware.sh:14-16](../../build_firmware.sh#L14-L16)), and normal RDP1 removal through the debug interface mass-erases MCU flash ([bootloader/README.md:109-136](../../bootloader/README.md#L109-L136)). The repository cannot attest the option bytes on a shipped device, and boot-time firmware integrity is only CRC32 after installation (F-25). A flash-write primitive that bypasses protection can replace firmware and recompute its integrity record, with no mechanism cryptographically binding the retained device secret to authorized firmware. |
-| SM-14 | Mnemonic generation uses the MCU TRNG but does not rely on it alone ([docs/security.md:23-26](../../docs/security-info.md)). | Confirmed, with an undocumented failure mode | Mnemonic-sized requests call `os.urandom`, mix the bytes into a SHA-512 pool, and derive output from both ([rng.py:6-43](../../src/rng.py#L6-L43), [helpers.py:20-24](../../src/helpers.py#L20-L24)). The native RNG returns zero on timeout and does not propagate hardware seed or clock errors, so this source fails open rather than reporting failure (F-18). |
-| SM-15 | Touch coordinates and 180 MHz timing contribute entropy ([docs/security.md:26](../../docs/security-info.md)). | Qualified | Decorated `PRESSING` events add `ticks_cpu()` plus the low eight bits of each coordinate to the pool ([decorators.py:6-18](../../src/gui/decorators.py#L6-L18), [decorators.py:21-41](../../src/gui/decorators.py#L21-L41)). That supports the data-source claim, but it is callback-driven and does not establish that every physical touch contributes independent or attacker-unknown entropy. |
-| SM-16 | Microphones are not yet entropy sources ([docs/security.md:27](../../docs/security-info.md)). | Confirmed | The recovery-phrase path has only `os.urandom` and calls to `rng.feed`, and the only application caller feeding external event data is the touchscreen callback ([rng.py:23-43](../../src/rng.py#L23-L43), [decorators.py:6-18](../../src/gui/decorators.py#L6-L18)). No microphone acquisition or microphone-to-pool path exists. |
-| SM-17 | Recovery-phrase entropy sources are hashed together ([docs/security.md:29](../../docs/security-info.md)). | Confirmed for recovery phrases | Recovery phrases request 16-32 bytes ([helpers.py:20-24](../../src/helpers.py#L20-L24)), and requests of at most 64 bytes return SHA-512-derived output over the current pool and fresh TRNG data ([rng.py:23-43](../../src/rng.py#L23-L43)). Requests over 64 bytes return raw TRNG output, but that branch is not used for a BIP-39 recovery phrase. |
-| SM-18 | The resulting entropy is "always better than any of the individual sources" ([docs/security.md:29](../../docs/security-info.md)). | Contradicted as an absolute claim | Hashing can preserve entropy under stated independence and hash assumptions. It cannot guarantee that every input adds entropy, or that output is always stronger. The pool begins with a public constant and has no source-health state, while a persistent TRNG failure can produce known zero words (F-18). Requests over 64 bytes bypass the pool in their returned value ([rng.py:6](../../src/rng.py#L6), [rng.py:23-33](../../src/rng.py#L23-L33)). |
-| SM-19 | Specter stores HD private keys associated with descriptor wallets and supports Miniscript ([docs/security.md:31-33](../../docs/security-info.md)). | Confirmed | Mnemonics become a BIP-32 root ([ram.py:54-72](../../src/keystore/ram.py#L54-L72)). Wallets persist and operate on descriptors ([wallet.py:109-121](../../src/apps/wallets/wallet.py#L109-L121), [wallet.py:167-224](../../src/apps/wallets/wallet.py#L167-L224)). The vendored descriptor parser builds and verifies Miniscript ([descriptor.py](../../f469-disco/libs/common/embit/src/embit/descriptor/descriptor.py), [miniscript.py](../../f469-disco/libs/common/embit/src/embit/descriptor/miniscript.py)). |
-| SM-20 | Wallets are separated by network and must be imported separately on each network ([docs/security.md:35](../../docs/security-info.md)). | Confirmed | Wallet state is rooted under both the active key fingerprint and the network name ([manager.py:72-90](../../src/apps/wallets/manager.py#L72-L90)). Switching networks reinitializes applications ([specter.py:376-411](../../src/specter.py#L376-L411)). Imports reject descriptor keys with incompatible network versions ([manager.py:529-539](../../src/apps/wallets/manager.py#L529-L539)). |
-| SM-21 | Inputs mixed from different wallets cause a warning ([docs/security.md:39-41](../../docs/security-info.md)). | Contradicted | `confirm_wallets` warns only when the wallet map contains `None`, meaning an unknown source. Two or more known wallets pass with no warning ([manager.py:356-383](../../src/apps/wallets/manager.py#L356-L383)). The final title lists each known wallet and amount, which is useful disclosure but is not the documented mixed-wallet warning. |
-| SM-22 | Change outputs show the destination wallet name ([docs/security.md:42](../../docs/security-info.md)). | Qualified and misleading for the default view | Output metadata includes the wallet name ([manager.py:734-752](../../src/apps/wallets/manager.py#L734-L752)), and the hidden details page renders it ([transaction.py:115-140](../../src/gui/screens/transaction.py#L115-L140)). Ordinary change outputs are omitted from the default page, and the expressions intended to add `"change "` to the label discard their results, so no page identifies the branch as change (F-24; [transaction.py:61-67](../../src/gui/screens/transaction.py#L61-L67)). |
-| SM-23 | Multisig or Miniscript signing requires prior descriptor import ([docs/security.md:43](../../docs/security-info.md)). | Contradicted | Import is the intended wallet-resolution path, but the manager invokes root-keystore signing for every input, including unresolved wallets ([manager.py:766-790](../../src/apps/wallets/manager.py#L766-L790)). The derived-key signing branch accepts host-supplied derivation metadata without proving that the derived public key is in the input script (F-04). A hostile PSBT can therefore obtain a signature without importing the claimed multisig or Miniscript policy. |
+| SM-01 | The host only sees public data and signatures; keys never leave the device; all critical information — receive addresses, amounts, change outputs — is shown on the device screen for verification ([L11-14](../../docs/security-info.md#L11-L14)). | Qualified | No private-key or mnemonic egress path exists on the host interface. The second half overstates the display: unwarned change outputs are omitted from the default transaction page and no page labels an output "change" (F-24), the fee and every warning sit below an attacker-chosen number of outputs in a scrolling container (F-19), and displayed input amounts are not authenticated (F-03). |
+| SM-02 | A thief with the locked device faces secrets encrypted under a key derived from the PIN and a unique internal secret, with the PIN rate-limited so on-device brute force is impractical ([L15-18](../../docs/security-info.md#L15-L18)). | Confirmed for the on-device case | `FlashKeyStore` derives `pin_secret = tagged_hash("pin", secret + pin)` ([flash.py:139](../../src/keystore/flash.py#L139)) and the persistent counter stops online guessing ([flash.py:114-125](../../src/keystore/flash.py#L114-L125)). The offline case is out of this claim's scope and the document states it correctly elsewhere — see SM-19 and F-06. |
+| SM-03 | Anti-phishing words change if the internal secret is gone, revealing device replacement or unauthorized reflashing ([L19-22](../../docs/security-info.md#L19-L22)). | Qualified | The derivation is sound ([ram.py:165-175](../../src/keystore/ram.py#L165-L175)), and in smartcard mode it also binds the card public key ([memorycard.py:66-86](../../src/keystore/memorycard.py#L66-L86)). Detection requires the PIN screen to be drawn at all. A substituted card that reports `PIN_UNLOCKED` suppresses it entirely, so the words are never shown and the check never happens (F-22). |
+| SM-04 | After the initial installation the bootloader only accepts firmware signed by the release keys ([L23-25](../../docs/security-info.md#L23-L25)). | Qualified | Threshold verification, signer lookup, duplicate rejection, and return-code handling are sound (PATH-13, PATH-23), and signed bytes are the executed bytes (PATH-28). Three conditions the claim omits: an unsigned image still clears write protection and erases firmware before its signatures are checked (F-33); boot-time integrity is an unkeyed CRC32, so a flash-write primitive installs replacement firmware with a recomputed record (F-25); and firmware authorization shares its signing domain with user message signing, so a release-key holder's device can be induced to produce a valid firmware signature (F-17). |
+| SM-05 | Physical attacks with lab equipment against the main MCU are out of scope; use smartcard mode or temporary-seed mode if that threat matters ([L29-33](../../docs/security-info.md#L29-L33)). | Confirmed | Accurate scoping, and consistent with F-06's prerequisite. The recommendation is the right mitigation for the threat as stated. |
+| SM-06 | The QR scanner's own firmware is out of scope; the scanner forwards decoded data that the main MCU treats as untrusted ([L37-40](../../docs/security-info.md#L37-L40)). | Confirmed | The MCU configures an external scanner and receives decoded payload bytes over UART ([qr.py:13-27](../../src/hosts/qr.py#L13-L27), [qr.py:110-120](../../src/hosts/qr.py#L110-L120)). No image-processing path exists in firmware. Scanner firmware is not in the repository. |
+| SM-07 | The display is controlled by the application MCU ([L44](../../docs/security-info.md#L44)). | Confirmed | Production startup imports and initializes the native display module before the application ([src/main.py:13](../../src/main.py#L13), [src/main.py:21-22](../../src/main.py#L21-L22)); the STM32 user module drives the LCD through LVGL. |
+| SM-08 | QSPI wallet files — descriptors, wallet metadata, settings — are encrypted and authenticated (AES-CBC + HMAC-SHA256, encrypt-then-MAC) with a key derived from the seed at `m/0x1D'`, so a flash dump reveals neither xpubs nor wallet structure, and tampering is detected on load ([L46-51](../../docs/security-info.md#L46-L51)). | Qualified | The construction is as described: `aead_encrypt` derives separate AES and HMAC keys by tagged hash and MACs the ciphertext ([helpers.py:69-105](../../src/helpers.py#L69-L105)), and `idkey` is `root.child(0x1D, hardened=True)` ([ram.py:72](../../src/keystore/ram.py#L72)). Three omissions. **Settings are not keyed from the seed** — `settings_key` is `tagged_hash("settings key", self.secret)` ([ram.py:152-153](../../src/keystore/ram.py#L152-L153)), the device secret, which is itself cleartext in flash, so anyone who dumps flash can read and forge channel settings without the seed. **The device label is plaintext** ([label.py:49-60](../../src/apps/label.py#L49-L60)). And there is **no rollback protection**: an authenticated older blob replays cleanly, which can suppress a gap-limit warning. |
+| SM-09 | QR image processing runs on a separate scanner module; USB and SD are managed by the main MCU; USB is off by default ([L53-56](../../docs/security-info.md#L53-L56)). | Confirmed | [usb.py:22](../../src/hosts/usb.py#L22) is `self.settings = { "enabled": False }`. SD is mounted through `pyb.SDCard` ([platform.py:42-101](../../src/platform.py#L42-L101)). Once USB is enabled it is not an authorization boundary — see F-05. |
+| SM-10 | The bootloader verifies ECDSA signatures **after** copying the payload to internal flash, reading data back from flash rather than from the removable SD card ([L70-74](../../docs/security-info.md#L70-L74)). | Confirmed | Copy at [bootloader.c:1242](../../bootloader/core/bootloader.c#L1242), verification at [bootloader.c:1254-1256](../../bootloader/core/bootloader.c#L1254-L1256). This closes the media-swap attack (PATH-28). The same ordering is what makes F-33 possible, and the document does not mention that side of it. |
+| SM-11 | Multisignature with configurable thresholds is supported, with a key hierarchy: vendor keys sign the bootloader and the main firmware, maintainer keys sign the main firmware only ([L75-78](../../docs/security-info.md#L75-L78)). | Qualified | The threshold mechanism is implemented correctly and counts records rather than keys (PATH-13). In the shipped configuration the hierarchy is nominal: `vendor_pubkey_list` and `maintainer_pubkey_list` in [bootloader/keys/production/pubkeys.c](../../bootloader/keys/production/pubkeys.c) are byte-identical — the same four keys in the same order — so vendor/maintainer separation provides no defense in depth (F-08). |
+| SM-12 | Downgrades are prohibited by a version-check record holding the latest version ever programmed, for bootloader and main firmware ([L79-81](../../docs/security-info.md#L79-L81)). | Confirmed for the supported path | `check_versions` compares against the maximum of the current integrity record and either version-check record, and the erase sequence keeps at least one copy across every power-cut point (PATH-24, PATH-26). A direct flash write bypasses the record entirely (F-25), which is a different attack, not a downgrade through the supported path. |
+| SM-13 | A non-upgradable start-up code integrity-checks both bootloader copies on every boot and runs the newest intact one; the main firmware's integrity record is verified on every normal boot ([L82-86](../../docs/security-info.md#L82-L86)). | Qualified | The mechanism is present and behaves as described. The claim's weight depends on what "integrity-check" means: the record holds only `pl_crc` and `struct_crc` ([bl_integrity_check.h:47-63](../../bootloader/core/bl_integrity_check.h#L47-L63)) with no key, signature, or MAC. It detects corruption, not substitution — an attacker who can write flash recomputes it (F-25). |
+| SM-14 | The initial installation is the trust-critical step: verify the PGP signature of `sha256.signed.txt`, verify the image hash, flash from a trusted computer ([L88-97](../../docs/security-info.md#L88-L97)). | Confirmed as a description | Accurate, and correctly identified as the trust anchor. The repository provides no mechanism that checks any of it. Related build-side gaps: the compiler archive is MD5-pinned (F-09) and the release tooling lock is from 2021 (D-03). |
+| SM-15 | The bootloader can be built with RDP Level 1 (blocks external readout; a JTAG erase also destroys the internal secret and is therefore visible), RDP Level 2 (blocked by default, requires a manual source change), and write protection over the start-up, bootloader, and main-firmware sectors ([L106-119](../../docs/security-info.md#L106-L119)). | Qualified | The RDP statements are accurate, including that RDP2 is deliberately compiled out ([bl_syscalls.c:750-753](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L750-L753)). The write-protection statement omits two conditions: WRP is a side effect of a *successful SD upgrade* and is not programmed by the image generator, so a factory-flashed device that never completed an upgrade has no WRP on those regions (limit L-1); and an unsigned upgrade clears WRP before authentication and does not restore it on rejection (F-33). |
+| SM-16 | Removing the protection afterwards always wipes the entire flash, including the internal secret ([L121-123](../../docs/security-info.md#L121-L123)). | Confirmed, not statically attestable | This is STM32 option-byte behaviour, documented in the bootloader README. No repository artifact can attest the option bytes actually programmed on a shipped device. |
+| SM-17 | A unique secret is generated on first boot and stored unencrypted at `/flash/keystore/secret`; its confidentiality relies entirely on readout protection; it drives the anti-phishing words ([L127-133](../../docs/security-info.md#L127-L133)). | Confirmed, with regeneration semantics | [ram.py:130-163](../../src/keystore/ram.py#L130-L163) writes and reads the secret with a bare `open()`. Note it is regenerated whenever the file is missing or unreadable, not only on literal first boot — so an erasure or a read failure silently produces new anti-phishing words. |
+| SM-18 | The PIN together with the unique secret generates the decryption key, so bypassing the PIN screen still fails decryption ([L135-137](../../docs/security-info.md#L135-L137)). | Qualified | True for flash and SD storage ([flash.py:139](../../src/keystore/flash.py#L139), [sdcard.py:86-91](../../src/keystore/sdcard.py#L86-L91)). In smartcard mode, lock state is a card assertion: a hostile card can report `PIN_UNLOCKED`, skip the screen, and supply an attacker-chosen portable blob (F-22, F-07). That does not decrypt genuine ciphertext, but it does let a PIN-screen bypass change the active spending keys. |
+| SM-19 | The unencrypted secret is the weak point: an attacker who reads internal flash obtains the secret and the PIN file, enabling offline brute force at full speed and cloning of the anti-phishing words; RDP blocks this ([L139-148](../../docs/security-info.md#L139-L148)). | Confirmed | This is an accurate statement of F-06, including the cloning consequence. It is also what makes SM-21 self-contradictory. |
+| SM-20 | At most 10 PIN attempts, then the device wipes; the counter is decremented and persisted *before* the PIN is checked, so there are effectively 9 verification attempts and a correct PIN on the 10th still wipes ([L152-157](../../docs/security-info.md#L152-L157)). | Confirmed exactly | [flash.py:114-125](../../src/keystore/flash.py#L114-L125) decrements, calls `save_state()`, then wipes on `<= 0` before computing the HMAC at [flash.py:126-128](../../src/keystore/flash.py#L126-L128). The documentation describes its own off-by-one accurately, including the fail-safe direction. |
+| SM-21 | The PIN check is an HMAC keyed with the internal secret, so the PIN cannot be brute-forced offline from flash contents alone ([L158-159](../../docs/security-info.md#L158-L159)). | **Contradicted** | The key to that HMAC is itself flash contents. See DOC-01. |
+| SM-22 | The PIN state file is authenticated, and tampering with it triggers a wipe ([L160-161](../../docs/security-info.md#L160-L161)). | Confirmed | `save_state` writes through `save_aead` keyed with the device secret ([flash.py:161-170](../../src/keystore/flash.py#L161-L170)), and `_unlock` wraps state handling in a `try` that converts any exception into `CriticalErrorWipeImmediately` ([flash.py:114-125](../../src/keystore/flash.py#L114-L125)). |
+| SM-23 | The wipe erases the MCU's internal flash and does not erase the smartcard; a card holding an encrypted secret becomes permanently inaccessible because the card-encryption key derived from the destroyed device secret is gone ([L162-167](../../docs/security-info.md#L162-L167)). | Qualified | Both statements hold. The omission is QSPI: [platform.py:263-274](../../src/platform.py#L263-L274) erases internal flash blocks 256-447 and two QSPI blocks, leaving 32,766 QSPI blocks unerased (H-24). A reader of this bullet would reasonably conclude that a wipe removes device-side data; it removes the keys, not the blocks. |
+| SM-24 | There is no key stretching — deriving keys from the PIN costs a single SHA-256 — and no time-based delay; the persistent fail-closed counter is the only rate limit and cannot be reset by power-cycling ([L171-179](../../docs/security-info.md#L171-L179)). | Confirmed in substance | Accurate and correctly reasoned. One imprecision with no security consequence: the derivation is `tagged_hash` plus HMAC-SHA256, so a handful of SHA-256 compressions rather than literally one. The offline-speed conclusion is unaffected. |
+| SM-25 | Choose a PIN of 8 or more digits, because offline brute force is the realistic worst case ([L181-184](../../docs/security-info.md#L181-L184)). | Confirmed as advice | Correct, and the right conclusion from SM-19. No minimum PIN length is enforced anywhere in `src/keystore/` — the advice is the only control (F-06). |
+| SM-26 | Temporary seed mode stores no private keys; the phrase lives only in RAM. Non-secret data still persists, and wallet data is encrypted with a key derived from the seed at `m/0x1D'`, so it stays unreadable until the phrase is re-entered, but its presence is visible ([L190-197](../../docs/security-info.md#L190-L197)). | Confirmed | `FlashKeyStore` starts amnesic ([flash.py:18-25](../../src/keystore/flash.py#L18-L25)); loading a mnemonic builds the root in RAM ([ram.py:54-72](../../src/keystore/ram.py#L54-L72)). The caveat about persisting descriptors and their xpubs is accurate and is the kind of disclosure the old model omitted. See SM-08 for the settings exception. |
+| SM-27 | Smartcard mode: the secret lives on a PIN-protected card and reaches RAM only when unlocked; the card enforces the attempt limit in hardware and bricks when exhausted; communication runs over an encrypted secure channel; anti-phishing words derive from both the device secret and the card public key, so a swap of either is detected; the secret may be stored encrypted or as portable plaintext ([L198-211](../../docs/security-info.md#L198-L211)). | Qualified, materially | The channel is real and replay-resistant (PATH-14), and the word derivation does bind the card key ([memorycard.py:66-86](../../src/keystore/memorycard.py#L66-L86)). Three conditions are omitted, and each defeats the detection this bullet promises. Card identity is trust-on-first-use and never pinned ([securechannel.py:52-58](../../src/keystore/javacard/applets/securechannel.py#L52-L58)), so "you detect if the card was swapped" holds only against a card that cooperates. The device takes the PIN state from the card's own answer ([secureapplet.py:48-51](../../src/keystore/javacard/applets/secureapplet.py#L48-L51)), so "the card enforces the attempt limit" is a statement about an honest card (F-22). And the "portable plaintext" format is encrypted under the public constant `b"\xcc"*32` ([memorycard.py:171](../../src/keystore/memorycard.py#L171), [memorycard.py:185](../../src/keystore/memorycard.py#L185)), which authenticates nothing about its origin (F-07). |
+| SM-28 | Internal flash mode stores the mnemonic encrypted and authenticated (AES-CBC + HMAC-SHA256, encrypt-then-MAC) under a key derived from the PIN and the device secret, protected by the attempt limit — but it is a software-only barrier and a sufficiently equipped physical attacker should be assumed able to extract flash, at which point security reduces to PIN entropy ([L212-223](../../docs/security-info.md#L212-L223)). | Confirmed | Implementation matches ([flash.py:174-186](../../src/keystore/flash.py#L174-L186)), and the caveat is an accurate statement of F-06 including its conclusion. |
+| SM-29 | The BIP-39 passphrase is never stored on the device or the smartcard; only the mnemonic is saved ([L235-237](../../docs/security-info.md#L235-L237)). | Confirmed | `set_mnemonic(mnemonic, password)` passes the passphrase straight into `bip39.mnemonic_to_seed` ([ram.py:54-65](../../src/keystore/ram.py#L54-L65)) and keeps no attribute for it. `grep -rn "passphrase" src/keystore/` returns nothing. |
+| SM-30 | Entropy sources are the MCU TRNG and the touchscreen, the latter contributing position and the moment of touch in 180 MHz ticks ([L253-256](../../docs/security-info.md#L253-L256)). | Confirmed | Decorated `PRESSING` events add `ticks_cpu()` and the low eight bits of each coordinate to the pool ([decorators.py:6-18](../../src/gui/decorators.py#L6-L18)). |
+| SM-31 | All entropy is hashed together in a SHA-512 pool, and the resulting entropy is "always at least as good as the best individual source"; the microphones are not used ([L258-261](../../docs/security-info.md#L258-L261)). | Contradicted as an absolute claim | The microphone statement is correct — no acquisition path exists. The "always at least as good" claim does not hold as stated: the pool begins at the public constant `b"7" * 64` ([rng.py:7](../../src/rng.py#L7)), and requests above 64 bytes return raw TRNG output and bypass the pool in their returned value ([rng.py:103-104](../../src/rng.py#L103-L104)). The document also does not mention that the native driver fails open (F-18), though the Python liveness check above it partially covers that. |
+| SM-32 | Specter holds HD private keys in descriptor wallets, supports miniscript, separates wallets per network across Mainnet/Testnet/Regtest/Signet, and Liquid support "exists in the codebase but is not actively maintained" ([L265-273](../../docs/security-info.md#L265-L273)). | Confirmed | Wallet state is rooted under fingerprint and network ([manager.py:72-90](../../src/apps/wallets/manager.py#L72-L90)) and imports reject cross-network descriptor keys ([manager.py:529-539](../../src/apps/wallets/manager.py#L529-L539)). The Liquid caveat is accurate and welcome. It is a maintenance statement, not a reachability statement: Liquid code is in the production build and owns F-11, F-23, F-31, F-35, F-36, and H-25. |
+| SM-33 | Before signing, the device lists every input with the name of the wallet it belongs to and its amount; unknown-wallet inputs are shown as "Unknown wallet" and trigger an explicit warning ([L279-283](../../docs/security-info.md#L279-L283)). | Qualified | `confirm_transaction_final` builds a title listing each wallet and amount ([manager.py:356-368](../../src/apps/wallets/manager.py#L356-L368)), and `confirm_wallets` warns whenever the map contains `None` ([manager.py:370-382](../../src/apps/wallets/manager.py#L370-L382)). But per-input values are drawn only on the hidden details page ([transaction.py:87-112](../../src/gui/screens/transaction.py#L87-L112)), which is not opened by default for an ordinary transaction, so "lists every input … and its amount" is not true of the screen a user actually sees (F-24). |
+| SM-34 | A transaction spending inputs from more than one wallet group triggers an explicit mixed-inputs warning at the top of the confirmation, visible without scrolling, mitigating the multisig/mixed-input change-address attack class ([L284-291](../../docs/security-info.md#L284-L291)). | **Contradicted** | No such warning exists. See DOC-02. |
+| SM-35 | Change outputs show the name of the wallet they are sent to ([L292](../../docs/security-info.md#L292)). | Contradicted for the default view | `metaout["label"]` does carry the wallet name ([manager.py:744-752](../../src/apps/wallets/manager.py#L744-L752)) and the details page renders it. But unwarned change is skipped entirely on page 1 ([transaction.py:60-66](../../src/gui/screens/transaction.py#L60-L66)), and the expressions that would add `"change "` to the label are bare discarded strings, so no page identifies an output as change at all (F-24). |
+| SM-36 | To use a multisig or miniscript wallet you must first import its descriptor; "the device only signs for wallets it knows" ([L293-295](../../docs/security-info.md#L293-L295)). | **Contradicted** | [manager.py:786](../../src/apps/wallets/manager.py#L786) calls `self.keystore.sign_input(...)` for every input whether or not a wallet resolved, and the derived-key branch signs with no proof that the derived public key appears in the input script (F-04). Import is the intended path, not an enforced one. |
+| SM-37 | Change is verified automatically only when there is one unambiguous spending wallet, its descriptor has exactly two branches, the output derivation resolves to branch-list position 1, and the device re-derives the exact output script from that branch and index ([L297-303](../../docs/security-info.md#L297-L303)). | **Contradicted**; the code is weaker than the text | The change flag is `(wallet is not None and len(wallets) == 1 and wallet in wallets)` ([manager.py:737-738](../../src/apps/wallets/manager.py#L737-L738)). The one-unambiguous-wallet condition and descriptor-based script re-derivation via `fill_scope` are real (PATH-02). The **two-branch requirement and the branch-position-1 requirement are not in the code**: `branch_idx` is read afterwards only to build a label and a gap-limit warning ([manager.py:753-759](../../src/apps/wallets/manager.py#L753-L759)). See DOC-03. |
+| SM-38 | If a branch-1 wallet change claim does not match, the output stays visible and the device displays `Invalid change metadata! Host claimed this output as wallet change, but it does not match your wallet. Verify the destination.` ([L306-312](../../docs/security-info.md#L306-L312)). | **Contradicted** | `grep -rn "Invalid change metadata" src/` matches no source file. See DOC-03. |
+| SM-39 | The device cannot check the recipient of an unverified output, so always verify the address, amounts, and fees on the device screen; the screen is the trusted output channel and the host is not ([L314-317](../../docs/security-info.md#L314-L317)). | Confirmed | This is the correct framing and the correct instruction. Its precondition is that the relevant text is on screen when Confirm becomes pressable, which F-19 and F-24 do not guarantee. |
+| SM-40 | QR is the default channel; USB is off by default; SD backups written by the device are encrypted and device-specific, while explicit exports — plain mnemonic `.txt`, BIP-85 keys, xpub files — are unencrypted ([L321-334](../../docs/security-info.md#L321-L334)). | Confirmed | Accurate on all three, including the distinction between device-written backups and user-chosen exports. One detail the bullet omits: the backup filename defaults to the first word of the mnemonic ([flash.py:223](../../src/keystore/flash.py#L223), [sdcard.py:66](../../src/keystore/sdcard.py#L66), [ram.py:402](../../src/keystore/ram.py#L402)), so a word of the recovery phrase appears in cleartext in a directory listing (H-11). |
+| SM-41 | The firmware has not undergone an external security audit, and RAM is not explicitly scrubbed on shutdown ([L343-348](../../docs/security-info.md#L343-L348)). | Confirmed | No zeroization of any secret exists anywhere in `src/`; secrets are immutable Python `str`/`bytes` under a garbage collector (§9.3). The disclosure is accurate. |
+| SM-42 | Transaction warnings are implemented in several places rather than one pipeline, covering unknown wallets, mixed-wallet inputs, non-`SIGHASH_ALL` flags, already-signed transactions, and gap-limit overruns; consolidating them is open work ([L354-361](../../docs/security-info.md#L354-L361)). | Qualified | The self-assessment that the checks are scattered is accurate and is exactly the right diagnosis. Two items in the list are wrong: there is no mixed-wallet warning at all (DOC-02), and the gap-limit warning is written to `metaout["warning"]` and then silently overwritten by the watch-only warning two lines later ([manager.py:757-760](../../src/apps/wallets/manager.py#L757-L760)), so it never reaches the screen for a watch-only wallet (F-24). The proposed consolidation would fix the overwrite. |
 
-The reverse comparison also found material current behavior that
-`docs/security.md` does not model:
+**What the document does not model.** The reverse comparison — current behavior
+with no corresponding claim:
 
-- The smartcard is now a default keystore option, but its identity is
-  trust-on-first-use, its PIN state is self-reported, and a failure can select a
-  weaker or destructive fallback (F-07, F-22, H-14).
-- The transaction model omits the PSBT v2-field display/signing divergences,
-  ignored input-verification failures, the arbitrary derived-key signing oracle,
-  hidden change, and incomplete confirmation data (✅ F-01, ✅ F-02, F-03, F-04, F-24).
-  ✅ F-01 and ✅ F-02 are fixed, so the v2-field half of this gap is closed; the rest
-  of the omission stands.
-- It does not describe intentional egress interfaces for arbitrary-path xpubs,
-  raw entropy, message signatures, BIP-85 outputs, the Liquid master blinding
-  key, or backups (F-05, F-14, F-21, H-03).
-- It does not describe the Liquid/PSET trust model, its unverified displayed
-  values, or its host-selected asset names (F-11, F-23).
-- It conflates flash locking with firmware authenticity. Upgrade-time ECDSA,
-  boot-time CRC32, shared message/firmware signing domains, and downgrade state
-  are distinct controls with distinct failure modes (F-17, F-25, F-33).
-- It does not describe animated-QR reassembly, UR fountain decoding, or the
-  residual native USB, SD/FatFs, and parser attack surface (F-16, F-28, H-08,
-  H-13).
-- It does not describe QSPI as an executable-code source. F-15 loads
-  unauthenticated `/qspi/config.py` before PIN entry without replacing signed
-  firmware, and H-24 shows that wipe does not physically erase most QSPI blocks.
-- It does not model native smartcard transport memory safety. A substituted card
-  reaches the pre-PIN one-byte stack overflow in F-34 independently of the
-  host-side identity and PIN-state defects.
+- Intentional secret-derived egress interfaces are not described as a class:
+  arbitrary-path xpubs and the fingerprint with **no** confirmation (F-05), up
+  to 1000 bytes of raw entropy with **no** confirmation (F-14), a message
+  signature at any derivation path (F-21), the SLIP-77 master blinding key over
+  the host interface and, without any prompt at all, in the GUI (H-03, H-21).
+- QSPI is described as a data store, not as an executable-code source. Ordinary
+  `import config` resolves and runs unauthenticated Python from writable QSPI
+  before PIN entry (F-15).
+- Native memory safety below the Python layer is not modeled: a malicious
+  smartcard reaches a one-byte stack overflow before PIN entry (F-34), and a
+  short PSET rangeproof reaches an out-of-bounds write before confirmation
+  (F-31).
+- Animated-QR reassembly and UR fountain decoding are not described. Neither
+  authenticates the assembled message (F-16, F-28, H-08, H-13).
+- The Liquid trust model is named as unmaintained but not characterized:
+  unverified displayed values (F-11), host-chosen asset names (F-23), and an
+  address encoder that does not identify one scriptPubKey (F-35, F-36).
+- The dependency posture is not described: a 2019 MicroPython base (D-01),
+  flattened native trees with no upstream pins (D-02), and six submodules
+  tracking forks with mutable `branch =` declarations (§1.2).
 
-This differential creates no new finding identifier: the material code failures
-it exposes are already captured above. It does establish that
-`docs/security.md` is a historical description, not an accurate current threat
-model. It overstates PIN-bypass resistance, universal QSPI authentication,
-entropy-combiner guarantees, mixed-wallet warnings, change visibility, and
-descriptor-import enforcement, and it omits the current smartcard, Liquid,
-secret-egress, parser, and firmware-persistence models. It should be rewritten
-before being relied on as a security guarantee.
+This differential creates no new finding identifier beyond the three DOC items
+below; the code failures it exposes are captured in Sections 6 and 7.
+
+#### DOC-01: `security-info.md` contradicts itself on offline PIN brute force
+
+**Status:** Confirmed · **Severity:** Low · **Confidence:** High ·
+**Owning codebase:** This repository's documentation
+
+[security-info.md:158-159](../../docs/security-info.md#L158-L159) states a
+safety property that is false:
+
+> - The PIN check is an HMAC keyed with the internal secret, so the PIN
+>   cannot be brute-forced offline from flash contents alone.
+
+The internal secret **is** flash contents. It is stored in cleartext at
+`/flash/keystore/secret` and read with a bare `open()` at
+[ram.py:130-138](../../src/keystore/ram.py#L130-L138). The PIN verifier
+(`tagged_hash("pin", secret)` keyed HMAC,
+[flash.py:126-128](../../src/keystore/flash.py#L126-L128)) and the attempt
+counter live in the same readable-flash trust domain. An attacker who reads
+flash has everything needed to check guesses offline. That is precisely F-06.
+
+The same document says the opposite twice, correctly:
+
+- [security-info.md:139-148](../../docs/security-info.md#L139-L148): "if an
+  attacker manages to read the internal flash … they obtain the device secret
+  together with the PIN file. That enables … brute-forcing your PIN **offline**
+  at full speed."
+- [security-info.md:171-176](../../docs/security-info.md#L171-L176):
+  "**There is no key stretching.** … a 4-digit PIN falls in milliseconds, a
+  6-digit PIN in seconds."
+
+So the bullet is not merely imprecise; it is refuted by its own surrounding
+prose. A reader who skims the "Brute-force protection is enforced on the device"
+list and stops there takes away the opposite of the truth.
+
+**Action.** Rewrite the bullet to say what the HMAC actually buys — that the PIN
+is not recoverable from the PIN file *without* the device secret, which is a
+statement about an attacker who has one and not the other:
+
+```markdown
+- The PIN check is an HMAC keyed with the internal secret, so the PIN file alone
+  is useless without that secret. Note both live in internal flash: an attacker who
+  reads flash obtains both and can brute-force offline (see above). RDP is what
+  separates these two cases, not the HMAC.
+```
+
+This is a documentation fix. The underlying weakness is F-06 and needs the
+memory-hard KDF proposed there.
+
+#### DOC-02: `security-info.md` documents a mixed-inputs warning that does not exist
+
+**Status:** Confirmed · **Severity:** Medium · **Confidence:** High ·
+**Owning codebase:** This repository's documentation, or its wallet manager,
+depending on which way it is resolved
+
+[security-info.md:284-291](../../docs/security-info.md#L284-L291) claims:
+
+> If a transaction spends inputs from more than one wallet group, the device
+> shows an explicit mixed-inputs warning at the top of the transaction
+> confirmation, so it is visible without scrolling.
+> This also applies when known-wallet and unknown-wallet inputs are mixed …
+> The warning is particularly intended to mitigate the class of multisig/mixed-input
+> change-address [attack](https://blog.trezor.io/details-of-the-multisig-change-address-issue-and-its-mitigation-6370ad73ed2a).
+
+No such warning exists. `grep -rni "mixed" src/ --include=*.py` returns only an
+unrelated comment in [rng.py:52](../../src/rng.py#L52) and a descriptor
+xpub/tpub check at [manager.py:536](../../src/apps/wallets/manager.py#L536).
+`confirm_wallets`
+([manager.py:370-382](../../src/apps/wallets/manager.py#L370-L382)) returns
+early whenever every input resolved:
+
+```python
+async def confirm_wallets(self, wallets, show_screen):
+    # check if any inputs belong to unknown wallets
+    if None not in wallets:
+        return True                     # two known wallets -> no warning at all
+```
+
+The only use of `len(wallets)` is
+[manager.py:738](../../src/apps/wallets/manager.py#L738), which *suppresses* the
+change flag when more than one wallet is present — a classification behaviour,
+not a warning. `confirm_transaction_final` does build a title listing each
+wallet and amount, which is useful disclosure but is not the documented warning.
+
+Three aggravating details:
+
+1. The claim is specific. It names placement ("at the top"), scroll visibility
+   ("without scrolling"), and an attack class it mitigates. A reader can
+   reasonably rely on it when deciding whether to approve a multi-wallet spend.
+2. "At the top … visible without scrolling" is structurally false even for the
+   warnings that *do* exist. `meta["warnings"]` is rendered inside the scrolling
+   `lv.page`, appended after all outputs and the fee
+   ([transaction.py:81-85](../../src/gui/screens/transaction.py#L81-L85)) — that
+   is F-19. And `meta["warnings"]` is never populated on the Bitcoin path at
+   all, which is F-24.
+3. **The warning exists in this repository, on another branch.** Commit
+   `7223458` ("Re-add mixed-inputs warning for multi-wallet transactions", #382)
+   is reachable from `master`, `origin/master`, and `origin/dev`, and
+   `git merge-base --is-ancestor 7223458 HEAD` is false. `origin/master` also
+   carries `docs/screenshots/mixed-inputs-warning-page1.png` and `-page2.png`.
+   The string `Mixed inputs from different wallets!` is present in the untracked
+   artifact `src/apps/wallets/__pycache__/manager.cpython-314.pyc` in this
+   working tree, and in no `.py` file here. See §1.3.
+
+**Action.**
+
+1. **Cherry-pick `7223458`** onto this branch, or rebase the branch onto
+   `origin/master`. This is the correct fix: the feature is written, reviewed,
+   and merged upstream of this branch, and the document already describes it.
+   Verify afterwards that the warning fires for two known wallets, not only when
+   an unknown wallet is present.
+2. Note that the "at the top … visible without scrolling" half of the claim
+   still depends on F-19 — the warning region is inside the scrolling `lv.page`
+   on this branch — and on F-24, since `meta["warnings"]` is never populated on
+   the Bitcoin path here. Confirm which of those `7223458` also addresses, and
+   fix the remainder.
+3. If for some reason the cherry-pick is rejected, correct the document instead:
+   remove the mixed-inputs paragraph and the Trezor-attack mitigation claim. A
+   documented control that does not exist is worse than a documented gap.
+
+#### DOC-03: The documented change-verification rules and warning are not in the shipped source
+
+**Status:** Confirmed · **Severity:** Medium · **Confidence:** High ·
+**Owning codebase:** This repository's documentation, or its wallet manager
+
+[security-info.md:297-312](../../docs/security-info.md#L297-L312) describes
+change verification in precise terms:
+
+> Change is verified for you automatically only when there is one unambiguous
+> spending wallet, its descriptor has exactly two branches, the output
+> derivation resolves to branch-list position 1, and the device re-derives the
+> exact output script from that branch and index.
+> …
+> If a branch-1 wallet claim does not match, the output remains visible and the
+> device displays: `Invalid change metadata! Host claimed this output as wallet
+> change, but it does not match your wallet. Verify the destination.`
+
+Two parts of that are not implemented.
+
+Both parts exist on `origin/master`, in commit `fc0e32d` ("feat: Fix
+change-output classification to require verified descriptor derivation", #387),
+which is not an ancestor of this branch (§1.3). So this is a missing
+cherry-pick, not unwritten work.
+
+**1. The branch conditions are absent.** The change flag is set at
+[manager.py:737-738](../../src/apps/wallets/manager.py#L737-L738):
+
+```python
+metaout.update({
+    "change": (wallet is not None and len(wallets) == 1 and wallet in wallets),
+    ...
+})
+```
+
+That is the one-unambiguous-wallet condition, and `fill_scope` / `Descriptor.owns`
+supply the script re-derivation (PATH-02). There is no test for
+`descriptor.num_branches == 2` and no test for `branch_idx == 1`. `branch_idx`
+is fetched on the next lines and used only for the display label and the
+gap-limit warning. An output owned by the sole spending wallet is classified as
+change regardless of which branch it derives from, including the receive branch.
+
+**2. The warning string does not exist.** `grep -rn "Invalid change metadata" src/`
+matches no source file. It matches exactly one path in the working tree:
+
+```text
+src/apps/wallets/__pycache__/manager.cpython-314.pyc
+```
+
+That file is untracked and ignored. Its string table also contains
+`Mixed inputs from different wallets!` (DOC-02). So a build of `manager.py` that
+implemented both documented behaviours existed on this machine, and the source
+in the tree is not it.
+
+**Impact.** A user who reads this section believes the device flags a
+host-supplied change claim that does not match. It does not: the output is
+classified by the rule above, and an unwarned change output is then dropped from
+the default transaction page entirely (F-24). The gap between documented and
+actual behaviour points the wrong way — the document promises a check that is
+missing, rather than omitting one that exists.
+
+**Action plan**
+
+1. **Cherry-pick `fc0e32d`**, or rebase this branch onto `origin/master`. The
+   same rebase closes DOC-02. Confirmed by:
+
+   ```bash
+   git log --all --oneline -S'Invalid change metadata' -- src/apps/wallets/manager.py
+   # fc0e32d feat: Fix change-output classification to require verified
+   #         descriptor derivation (#387)
+   git merge-base --is-ancestor fc0e32d HEAD    # false
+   ```
+2. If the cherry-pick is not taken, the branch conditions are small to
+   reimplement — but prefer the upstream version, which has been reviewed:
+
+   ```python
+   # manager.py, replacing the change expression
+   is_change = False
+   if wallet is not None and len(wallets) == 1 and wallet in wallets:
+       res = wallet.get_derivation(out.bip32_derivations)
+       if res:
+           idx, branch_idx = res
+           if wallet.descriptor.num_branches == 2 and branch_idx == 1:
+               is_change = True
+           else:
+               metaout["warning"] = (
+                   "Invalid change metadata! Host claimed this output as wallet "
+                   "change, but it does not match your wallet. "
+                   "Verify the destination.")
+   metaout["change"] = is_change
+   ```
+
+   Either way, check F-24 item 2 in the same pass: `metaout["warning"]` is a
+   single string and is overwritten by the watch-only warning a few lines later,
+   so the new warning disappears for watch-only wallets unless that is fixed
+   too.
+3. Add a regression test in
+   [test/tests_native/test_change_classification.py](../../test/tests_native/test_change_classification.py),
+   which already exercises this path, asserting that a receive-branch output and
+   a three-branch descriptor are **not** classified as change and that the
+   warning is present.
+4. Remove `__pycache__` from the working tree and confirm it is ignored, so a
+   stale artifact cannot again be the only place a security behaviour exists.
+
 ## 9. Properties that hold, and limits of static review
 
 ### 9.1 Security properties that hold in reviewed paths
@@ -4549,6 +6338,13 @@ Each entry states the evidence, why the property holds, the residual risk, and
 confidence. "Blocked" means the reviewed implementation stops the path. "Not
 reachable" means the path cannot be entered in the production configuration.
 
+A property that is Blocked here is blocked in the reviewed path only. Each
+entry names the specific check that enforces it, so the claim is falsifiable:
+if the cited code changes, the claim must be re-established.
+
+PATH-18 is the one entry in this set that does **not** hold — it is retained
+because a provenance claim that fails is itself a result.
+
 #### PATH-01: Ordinary transaction signing reaches confirmation — Blocked
 
 Evidence: wallet signing metadata is prepared before `TransactionScreen` is
@@ -4556,9 +6352,8 @@ shown, and signing proceeds after that screen returns approval
 ([manager.py:611-621](../../src/apps/wallets/manager.py#L611-L621),
 [manager.py:714-786](../../src/apps/wallets/manager.py#L714-L786)).
 Why it holds: there is no direct host-to-keystore transaction-signing caller.
-Residual risk: ✅ F-01, ✅ F-02, F-03, F-04 show that confirmation can authorize false or
-insufficient metadata even though the call is present. ✅ F-01 and ✅ F-02 are fixed;
-F-03 and F-04 keep this residual risk live.
+Residual risk: F-03 and F-04 show that confirmation can authorize false or
+insufficient metadata even though the call is present.
 Confidence: High
 
 #### PATH-02: Descriptor ownership re-derives the claimed script — Blocked
@@ -4570,9 +6365,10 @@ redeem and witness scripts with descriptor-derived versions
 [wallet.py:167-226](../../src/apps/wallets/wallet.py#L167-L226)).
 Why it holds: ownership rests on a device-derived script rather than a host
 assertion, and the branch and index ranges are bounded.
-Residual risk: ✅ F-01 corrupted the scope being compared; it is fixed, so that
-risk is retired. Full descriptor, Miniscript, TapTree, script, and address-parser
-safety is still not established here.
+Residual risk: this defends the script, not the scope it is handed — see H-27.
+Full descriptor, Miniscript, TapTree, script, and address-parser safety is not
+established here. The branch and two-branch conditions the documentation
+describes are not implemented (DOC-03).
 Confidence: High
 
 #### PATH-03: Application SD and USB adapters do not execute input — Blocked
@@ -4619,6 +6415,10 @@ Evidence: the BIP85 application defines no host prefixes, so its inherited
 `can_process()` result is false. Mnemonic display is likewise entered from GUI
 flows rather than the central host-command dispatcher
 ([src/apps/bip85.py](../../src/apps/bip85.py), [src/app.py](../../src/app.py)).
+[app.py:13](../../src/app.py#L13) has `prefixes = []`,
+[app.py:27-30](../../src/app.py#L27-L30) defines `can_process` as
+`return prefix in self.prefixes`, and `grep -n "prefixes" src/apps/bip85.py`
+returns nothing, so BIP-85 inherits the empty list.
 Why it holds: hostile QR, SD, and USB streams cannot directly dispatch those
 GUI-only export operations.
 Residual risk: the user can deliberately invoke them, and BIP85 internals were
@@ -4742,15 +6542,19 @@ Residual risk: the transition is weakly signalled and may be destructive, or may
 let an attacker choose a new PIN (H-14).
 Confidence: High
 
-#### PATH-16: Submodules are pinned by immutable gitlinks — Blocked
+#### PATH-16: Submodules are pinned by immutable gitlinks — Blocked, narrowly
 
-Evidence: every recursive submodule status matches its recorded gitlink, and no
-`branch =` declaration exists in the recursive submodule configuration.
-Why it holds: ordinary upstream branch movement cannot change the fetched commit
-without a reviewed parent-tree gitlink change.
-Residual risk: relative URLs affect the effective origin, malicious pinned
-content is still trusted, and content review is incomplete.
-Confidence: High
+Evidence: every recursive submodule status matches its recorded gitlink
+(`git submodule status --recursive` reports no `+`/`-` marker on any line).
+Why it holds: `git clone --recursive` and `git submodule update` fetch the
+recorded commit, so ordinary upstream branch movement cannot change the fetched
+content without a reviewed parent-tree gitlink change.
+Residual risk: this is narrower than it looks. Six `branch =` declarations
+exist, so `git submodule update --remote` — or CI that uses it — silently
+advances to a mutable branch tip. Six of eight URLs point at forks, so the
+declared origin is not the upstream project. Malicious pinned content is still
+trusted, and content review is incomplete. See §1.2.
+Confidence: High for the narrow property as stated.
 
 #### PATH-17: Satoshi display arithmetic is exact on this board — Blocked
 
@@ -4765,19 +6569,29 @@ Residual risk: this does not validate asset labels, hidden fields, scrolling, or
 the relationship between displayed and signed transaction objects.
 Confidence: High
 
-#### PATH-18: Vendored embit matches its identified upstream tree — Blocked
+#### PATH-18: The `embit` tree matches its identified upstream — **Not established**
 
-Evidence: all 41 vendored Python files match upstream `189efc4`, and the only
-whole-tree differences are three omitted files or directories consistent with an
-embedded subset.
-Why it holds: no local content modification explains the embit findings.
-Residual risk: the matched upstream version itself contains ✅ F-01, ✅ F-02, F-03, F-04 and
-F-10, and later upstream fixes were not checked at audit time. They have since
-been checked: the tree now tracks embit v0.8.2 as a submodule, which carries the
-✅ F-01 / ✅ F-02 fix. F-10 is not fixed there. Note the provenance basis of this
-PATH item no longer applies — see AD-06 in
-[audit-comparison.md](audit-comparison.md).
-Confidence: High
+Evidence: none available in the repository. `embit` is a submodule at `eb6104f`
+(tag `v0.8.2`) whose declared URL is a fork under
+`hardware-wallets-and-cryptography/`, not the upstream project. Nothing in the
+tree records whether that commit is identical to, ahead of, or diverged from
+upstream `embit` v0.8.2.
+Why it does not hold: the tag name asserts a version; the URL does not assert
+provenance. A fork can carry a tag `v0.8.2` on any content.
+Consequence: no provenance claim about the `embit` tree in this repository is
+currently supported. That matters because `embit` owns F-04, F-10, F-35, F-36,
+and H-26, and because the display-to-signed-output invariant is enforced only
+there (H-27).
+**Action.** Establish and record the relation:
+
+```bash
+git -C f469-disco/libs/common/embit fetch https://github.com/diybitcoinhardware/embit v0.8.2
+git -C f469-disco/libs/common/embit diff FETCH_HEAD HEAD --stat
+```
+
+An empty diff settles it. A non-empty diff must be reviewed line by line,
+because it is local modification to the signing library.
+Confidence: High that the property is not established.
 
 #### PATH-19: The secp256k1 generator table is canonical — Blocked
 
@@ -5100,16 +6914,16 @@ Evidence: output metadata is built from `psbtout.script_pubkey` and nothing else
 ([manager.py:737-741](../../src/apps/wallets/manager.py#L737-L741),
 [manager.py:91-99](../../src/apps/wallets/manager.py#L91-L99)), and that string is
 what reaches the confirmation label
-([transaction.py:180-190](../../src/gui/screens/transaction.py#L180-L190)).
+([transaction.py:179-189](../../src/gui/screens/transaction.py#L179-L189)).
 Why it holds: there is no host-supplied address field anywhere in the display
 path. No PSBT record carries an address string, and no branch prefers one over the
 derived value. Encoding is deterministic and gated (PATH-34, PATH-35), so a given
 scriptPubKey has exactly one rendering.
 Residual risk: this is a statement about the encoder and the metadata source, not
-about which scriptPubKey ends up in the signed transaction. ✅ F-01 and ✅ F-02 were
-exactly the case where the displayed scope is not the signed scope; both are fixed,
-leaving F-24 and F-19, which govern whether the string is on screen when the user
-presses Confirm, and F-03 and F-04 on the signing side. The
+about which scriptPubKey ends up in the signed transaction. That the displayed
+scope equals the signed scope rests on PATH-41, which is enforced only in the
+dependency (H-27). F-24 and F-19 then govern whether the string is on screen
+when the user presses Confirm, and F-03 and F-04 remain on the signing side. The
 Liquid equivalent does not hold (F-35).
 Confidence: High
 
@@ -5139,6 +6953,30 @@ checked exhaustively for the three confidential HRPs `lq`, `el`, and `tlq`, but 
 is order dependent, and MicroPython does not guarantee dictionary order. Adding a
 network whose HRP is a prefix of another would break it silently.
 Confidence: High
+
+#### PATH-41: v2-only PSBT scope fields are rejected inside a v0 PSBT — Blocked
+
+Evidence: `PSBTScope.read_from` declares `V2_FIELDS` per scope class and raises
+`PSBTError("PSBTv2 field is not allowed in PSBTv0")` unless the parsed PSBT
+version is 2
+([psbt.py:162-163](../../f469-disco/libs/common/embit/src/embit/psbt.py#L162-L163)).
+`PSBTView` plumbs the parsed version into every scope read, so the streaming
+path this firmware actually uses is covered and not only `PSBT.parse`
+([psbtview.py:352-354](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L352-L354),
+[psbtview.py:364-366](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L364-L366)).
+The reverse direction is closed too: a v2 PSBT carrying a global transaction is
+rejected at
+[psbtview.py:289-290](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L289-L290).
+Why it holds: the guard fails closed. An omitted `version` kwarg defaults to
+`None`, which is not 2, so a scope read that loses the version context rejects
+rather than accepts. This is what keeps the displayed output scope equal to the
+global transaction output that gets signed — the single most load-bearing
+property on the Bitcoin signing path.
+Residual risk: the property is enforced only in the dependency, no test in this
+repository pins it, and `embit` is tracked through a fork pin whose upstream
+relation is not established (H-27, PATH-18, §1.2). A submodule bump can retire
+this entry silently.
+Confidence: High for the current pin.
 
 ### 9.2 Bootloader limits
 
@@ -5175,7 +7013,7 @@ Confidence: High
 - No firmware build, flash, unlock, OpenOCD, hardware RNG, smartcard, or physical
   attack was performed.
 - Network access was read-only and used only for upstream comparison. No release
-  artifact was downloaded. Static inspection supports a deterministic v1.9.0
+  artifact was downloaded. Static inspection supports a deterministic Docker
   build, but official release provenance and bit-for-bit reproduction are
   unchecked.
 - **RAM remnants are not answerable statically.** Structurally, secrets are
@@ -5227,8 +7065,9 @@ Confidence: High
    returned signature. One test settles a High finding.
 2. Add crafted v0 PSBT tests containing each v2-only input and output key in
    every field order, and assert rejection before confirmation. Include
-   **duplicate** `0x0f` records, which are currently accepted last-wins, and
-   over-long values for `0x0f` and `0x10`.
+   **duplicate** `0x0f` records and over-long values for `0x0f` and `0x10`.
+   Nothing in `test/` currently pins this rejection, so a submodule bump can
+   retire it silently (H-27, PATH-41).
 3. Compare displayed metadata with the exact global transaction and
    sighash source, for legacy, SegWit v0, and Taproot inputs.
 4. Test change classification and ensure no real output can disappear through a
@@ -5267,7 +7106,7 @@ Confidence: High
 17. Build with `mpy-cross -O2` and assert that the UR decoder still rejects
     inconsistent parts, that is, that no security check depends on `assert`
     (H-13).
-18. Have two people build `24d1137` on different machines and compare
+18. Have two people build this tree on different machines and compare
     `sha256(bin/specter-diy.bin)`.
 19. Assert `secp256k1_context_preallocated_size() <= PREALLOCATED_CTX_SIZE` at
     build or boot time, so a future configuration change cannot invalidate the
@@ -5333,11 +7172,10 @@ was recomputed and verified.
 
 Still to do:
 
-1. ~~Check whether `embit` `master` has since fixed ✅ F-01, ✅ F-02, and F-10, to set
-   the embargo clock.~~ **Done.** Upstream fixed ✅ F-01 and ✅ F-02 in the version
-   this tree now pins (v0.8.2, `PSBTScope.read_from` version guard). F-10 is **not**
-   fixed upstream, so the embargo question applies to F-10, F-03, and F-04 only.
-2. Fetch official v1.9.0 release metadata, signatures, and binaries. Run two
+1. Establish whether `embit` upstream has fixed F-04, F-10, F-35, or F-36, to
+   set the embargo clock for the coordinated disclosure in §12.2. The pinned
+   v0.8.2 does not fix any of them.
+2. Fetch official release metadata, signatures, and binaries. Run two
    clean `linux/amd64` Docker builds from this exact tree, compare their main
    firmware, bootloader, initial-firmware, and unsigned-upgrade hashes, then
    import the published signatures in the documented order and compare the signed
@@ -5345,8 +7183,14 @@ Still to do:
 3. Adopt the generator-table recomputation as a build-time assertion.
 4. Restore an upstream commit identifier and a reproducible delta check for every
    flattened MicroPython native dependency (D-02).
-5. Refresh the hash-locked release-tool dependencies, including
-   `cryptography==3.3.2`, and add automated advisory checks (D-03).
+5. Refresh the hash-locked release-tool dependencies. `cryptography` is pinned
+   at 3.4.8, from August 2021; bring it to a current release and add automated
+   advisory checks (D-03).
+6. Establish the upstream relation for the six forked submodules and record it
+   in the repository (§1.2, PATH-18). Start with `embit`, which owns the most
+   findings and the PATH-41 invariant.
+7. Diff the 33 commits on `origin/master` that this branch lacks, and decide
+   which are security-relevant (§1.3). Three already are.
 
 ## 11. Final funds-theft analysis
 
@@ -5359,39 +7203,29 @@ funds-theft path. **Not prevented** means a confirmed vulnerability or design
 limitation leaves that path open. **Conditional** or **unresolved** identifies a
 prerequisite or coverage limit that static inspection did not settle.
 
-> **Current tree:** this table is the v1.9.0 analysis. ✅ F-01 and ✅ F-02 are fixed,
-> so every verdict that rests on the ✅ F-01 PSBT payload — malicious host, QR code,
-> PSBT, SD card, USB device, transaction, and malformed Bitcoin data — loses its
-> Critical direct-theft basis. Those rows are **not** thereby "Prevented": F-03
-> (discarded input verification), F-04 (derived-key signing oracle), and F-30
-> (`NONE | ANYONECANPAY`) still reach signing over the same transports, and F-31
-> still reaches a pre-confirmation native write on the PSET path. The strongest
-> remaining Bitcoin path is High rather than Critical. Each affected row is marked
-> below; the table has not otherwise been re-scored.
-
 | Attacker capability | Strongest realistic path to funds | Does the current implementation prevent it? |
 | --- | --- | --- |
-| Malicious host | Send a v0 PSBT whose v2-only output fields show a benign payment while the authoritative global transaction pays an attacker (✅ F-01). Alternatively request `NONE \| ANYONECANPAY`, which produces a reusable input signature after one generic warning (F-30). | **No — Critical.** ✅ F-01 reaches confirmation over any enabled host transport, and confirmation cannot protect the user because the displayed transaction is false. USB being off by default reduces one transport's reachability but does not fix the signing boundary. **Current tree: ✅ F-01 is fixed, so this row's Critical basis is gone.** |
-| Malicious QR code | Encode the ✅ F-01 PSBT as a QR signing request. F-16 and F-28 can additionally splice or corrupt multipart payloads without authenticating the assembled message, although those framing defects are not needed for ✅ F-01. | **No — Critical.** Scanning requires user action, but the resulting confirmation can display the attacker-selected benign output rather than the output being signed. **Current tree: ✅ F-01 is fixed, so this row's Critical basis is gone.** |
-| Malicious PSBT or PSET | For PSBT, ✅ F-01 redirects the signed output while keeping a benign display. For PSET, F-31 reaches a pre-confirmation native out-of-bounds write; F-11 and F-23 misrepresent confidential values or asset identity; F-30 yields a reusable `NONE \| ANYONECANPAY` signature. | **No.** The strongest PSBT path was Critical and directly profitable. The strongest PSET path is confirmed memory corruption before user approval, although no key-extraction chain was established. **Current tree: ✅ F-01 is fixed, so this row's Critical basis is gone.** |
-| Malicious SD card | Supply a selected `.psbt` file that triggers ✅ F-01. The application-level adapter does not execute files, but it deliberately forwards their bytes to the vulnerable parser and signing flow. | **No for funds theft through signing.** File selection and confirmation are required, but both are satisfied by the deceptive ✅ F-01 display. No application-level SD code-execution path was found. FatFs and native-driver memory safety are unreviewed. **Current tree: ✅ F-01 is fixed, so this row's Critical basis is gone.** |
-| Malicious USB device | After the user enables USB, send the ✅ F-01 PSBT through VCP. The same channel can also export arbitrary-path xpubs and the master fingerprint with no per-request confirmation (F-05). | **No once USB is enabled.** The default-off setting reduces exposure but is not an authorization boundary after opt-in, and ✅ F-01 was a Critical direct-theft path. **Current tree: ✅ F-01 is fixed, so this row's Critical basis is gone; F-05's unconfirmed xpub/fingerprint export over the same channel is unchanged.** |
+| Malicious host | Send a multi-input SegWit PSBT across two sessions, understating a different input each time, and combine the individually valid signatures into a transaction with an arbitrarily large miner fee (F-03). Alternatively supply derivation metadata for a known xpub and collect a signature at a path of the attacker's choosing (F-04), or request `NONE \| ANYONECANPAY` for a reusable input signature after one generic warning (F-30). | **No — High.** All three reach confirmation over any enabled host transport, and the confirmation screen does not carry the information that would expose them: per-input values are on the hidden details page and there is no fee sanity check (F-24). USB being off by default reduces one transport's reachability but is not an authorization boundary after opt-in. |
+| Malicious QR code | Encode any of the F-03, F-04, or F-30 payloads as a QR signing request. F-16 and F-28 additionally allow splicing or corrupting multipart payloads without authenticating the assembled message. | **No — High.** Scanning requires user action, but the resulting confirmation does not show enough to distinguish the hostile payload from a benign one (F-24, F-19). The QR framing defects are not needed for the signing paths; they widen payload confusion. |
+| Malicious PSBT or PSET | For PSBT, F-03 inflates the fee paid to a miner and F-04 extracts a signature at a chosen path. For PSET, F-31 reaches a pre-confirmation native out-of-bounds write; F-11 and F-23 misrepresent confidential values or asset identity; F-35 renders distinct scripts as one address; F-30 yields a reusable `NONE \| ANYONECANPAY` signature. | **No.** The strongest PSBT paths are value-destroying (F-03) and a signing oracle (F-04). The strongest PSET path is confirmed memory corruption before user approval, although no key-extraction chain was established. |
+| Malicious SD card | Supply a selected `.psbt` file carrying the F-03 or F-04 payload. The application-level adapter does not execute files, but it deliberately forwards their bytes to the signing flow. | **No for funds theft through signing.** File selection and confirmation are required, and neither exposes the defect. No application-level SD code-execution path was found. FatFs and native-driver memory safety are unreviewed. |
+| Malicious USB device | After the user enables USB, take arbitrary-path xpubs and the master fingerprint with **no** per-request confirmation (F-05), then use them to build the F-04 derivation records and send the PSBT back over the same channel. | **No once USB is enabled.** The default-off setting reduces exposure but is not an authorization boundary after opt-in. F-05 and F-04 compose into a complete oracle over one transport. |
 | Malicious, emulated, or substituted secure element | Report `PIN_UNLOCKED` and return a constant-key attacker seed (F-07, F-22), or stream card bytes into the pre-PIN native receive overflow (F-34). A card fault can also force the weaker SD backend (H-14). | **Not prevented.** PIN bypass and capture of future deposits are confirmed at the host-policy layer. F-34 adds native memory corruption with unproven control-flow impact. No path was found to extract the genuine card's existing seed. External applet behavior and target stack effects remain open. |
 | Malicious firmware update | Harvest two release signatures through the generic message app (F-17). Separately, submit an unsigned but structurally valid SD image: F-33 clears WRP and destroys firmware before rejecting its signatures. With later flash write, F-25 accepts a replacement plus forged CRC records. | **No under the stated prerequisites.** The threshold verifier and the supported downgrade policy hold, but authorization-domain reuse and pre-authentication protection sequencing defeat the intended operational boundary. |
 | Malicious dependency | Place seed-exfiltration or display/signing-divergence code in a dependency that executes inside the firmware trust boundary. | **No if malicious code is accepted into the pinned tree.** There is no sandbox between dependencies and wallet secrets. Outer pins, all MicroPython fork commits, and the secp binding were reviewed, but flattened HAL/USB/FatFs trees have no upstream SHA to reproduce or diff (D-02). |
 | Malicious repository contributor | Hide exfiltration in trusted application or build code, or in a subtle flag or path change such as assert stripping, writable-path imports, warning removal, or provenance-free vendoring (H-13, F-15, H-22, D-02). | **No architectural prevention.** No deliberate backdoor was found, but F-15 proves a small import-path change can bypass signed-firmware expectations, and absent CI, CODEOWNERS, and release attestation weakens detection. |
 | Malicious physical attacker | Read internal flash for F-06, write `/qspi/config.py` for persistent pre-PIN execution (F-15), induce F-32's USB MSC fault and chain it into both, or use a malicious smartcard (F-34). With direct flash write, install firmware and forge CRC records (F-25); F-33 can first clear WRP with an unsigned SD file. | **Conditional, and not established as prevented.** F-15 needs a QSPI writer, F-32 an inducible boot fault, F-34 timing, and F-06 and F-25 practical hardware access. Once those prerequisites hold, software controls do not restore the intended boundary. |
-| Compromised build environment | Inject key-stealing code into compiler output or generated firmware, then present its opaque firmware hash to release-key holders for threshold authorization. F-08 also means the finished artifact does not record which key set established its trust root. | **Partly, but not reliably detected.** Two release signatures are still required, but F-17's signing UI does not bind approval to reviewed source or recognizable binary content. The v1.9.0 build appears deterministic, but no two clean builds and no official-release comparison were performed, so independent detection is unverified. |
-| Malicious transaction | Put an attacker output in the authoritative transaction while ✅ F-01 supplies benign displayed output metadata. Even without that, F-30 can request `NONE \| ANYONECANPAY` and later transplant the approved input signature into an arbitrary payment. | **No.** ✅ F-01 is a Critical direct-theft path, and F-30 is a separate blank-cheque path gated only by a generic warning and user approval. **Current tree: ✅ F-01 is fixed, so this row's Critical basis is gone.** |
-| Malicious wallet descriptor | Ask the user to import a policy in which an attacker key can satisfy the spending threshold, then steal funds deposited to that policy. After import, the ownership path re-derives the descriptor and overwrites host-supplied scripts, which prevents later script substitution except through ✅ F-01's corrupted scope — and ✅ F-01 is fixed, so that exception is closed. | **Partly.** The implementation prevents the post-import script-spoofing path and identifies device, external, and NUMS keys during confirmation. It cannot prevent theft when the user approves an attacker-spendable policy. Script and address-encoding safety is established for Bitcoin (PATH-34 to PATH-37) but not for the Liquid confidential encoder (F-35). Full Miniscript and TapTree safety is not established. |
-| Malformed Bitcoin data | Use version-incompatible PSBT fields to create ✅ F-01. F-10 separately shows declared-length parser desynchronization with unresolved target impact. | **No for the demonstrated malformed PSBT.** The parser accepted incompatible fields that enabled Critical theft; it now rejects them. No reviewed malformed Bitcoin path independently established code execution; F-31 is the separate malformed-Liquid result. **Current tree: ✅ F-01 is fixed, so this row's Critical basis is gone.** |
+| Compromised build environment | Inject key-stealing code into compiler output or generated firmware, then present its opaque firmware hash to release-key holders for threshold authorization. F-08 also means the finished artifact does not record which key set established its trust root. | **Partly, but not reliably detected.** Two release signatures are still required, but F-17's signing UI does not bind approval to reviewed source or recognizable binary content. The Docker build appears deterministic by inspection, but no two clean builds and no official-release comparison were performed, so independent detection is unverified. |
+| Malicious transaction | Request `NONE \| ANYONECANPAY` and later transplant the approved input signature into an arbitrary payment (F-30). Or rely on F-24 and F-19: present many outputs so the fee and every warning sit below the fold while Confirm stays pressable. | **No.** F-30 is a blank-cheque path gated only by a generic warning and user approval, and the confirmation screen does not reliably show the data that would make an unusual transaction recognizable. |
+| Malicious wallet descriptor | Ask the user to import a policy in which an attacker key can satisfy the spending threshold, then steal funds deposited to that policy. After import, the ownership path re-derives the descriptor and overwrites host-supplied scripts, which prevents later script substitution (PATH-02). | **Partly.** The implementation prevents the post-import script-spoofing path and identifies device, external, and NUMS keys during confirmation. It cannot prevent theft when the user approves an attacker-spendable policy. Script and address-encoding safety is established for Bitcoin (PATH-34 to PATH-37) but not for the Liquid confidential encoder (F-35). Full Miniscript and TapTree safety is not established. |
+| Malformed Bitcoin data | F-10 shows declared-length parser desynchronization in `non_witness_utxo` with unresolved target impact. Version-incompatible scope fields are rejected (PATH-41). | **Partly.** The version-consistency class is closed in the parser, though only there and with no test pinning it here (H-27). No reviewed malformed Bitcoin path independently established code execution; F-31 is the separate malformed-Liquid result. |
 
 ### 11.1 Final security questions
 
 | Question | Assessment |
 | --- | --- |
 | Can a malicious host steal private keys through normal firmware interfaces? | No direct private-key or mnemonic export exists. But a host can take the **master xpub** and fingerprint with no confirmation at all (F-05), and can get a **recoverable** signature — and therefore the public key — at any derivation path with one confirmation. Privacy loss is total. No spending-authority path was found. Physical flash readout can enable seed recovery (F-06). |
-| Can a host cause signing of a transaction different from what the user believes was approved? | **Yes, four ways at v1.9.0; three in the current tree.** ✅ F-01 was an attacker-profitable divergence (Critical) and ✅ F-02 a value-destroying one — **both fixed**. F-03 is a value-destroying divergence paid to a miner and is **unchanged** (High). F-21 is a divergence on the message-signing prompt (High). F-24 means the default screen omits input values and change outputs, and transaction version, locktime, and input sequences appear on neither page. |
+| Can a host cause signing of a transaction different from what the user believes was approved? | **Yes, three ways.** F-03 is a value-destroying divergence paid to a miner: displayed input amounts are never authenticated (High). F-21 is a divergence on the message-signing prompt, where a NUL truncates what is drawn but not what is hashed (High). F-24 and F-19 are the structural version: the default screen omits input values and change outputs, transaction version, locktime, and input sequences appear on neither page, and the fee sits below an attacker-chosen number of outputs while Confirm stays fixed on screen. The v2-field parser class is closed (PATH-41), but only in the dependency (H-27). |
 | Can malicious QR, PSBT, or descriptor data exploit the wallet? | **Yes for malicious PSBT data.** For QR, F-16 and F-28 let frames from two payloads be spliced and never check any checksum, and H-08 lets malformed characters decode silently. None is an independent theft primitive, because the result is still displayed, but they amplify payload confusion. Malicious PSET data additionally reaches the Liquid address encoder and produces a misleading confirmation screen (F-35) or aborts it (H-25). Script, Base58, and Bech32 handling is clean on the Bitcoin side (PATH-34 to PATH-37). Descriptor scope is only partly resolved: the ownership path re-derives and compares the scriptPubKey and the device overwrites host-supplied witness and redeem scripts, but full descriptor, Miniscript, and TapTree parser safety is not established. |
 | Can SD or USB data execute unauthorized code? | No application-level adapter evaluates payload data, and boot-time SD module shadowing is not compiled in (PATH-30). However, F-32 plausibly exposes both flash partitions read-write over USB MSC after an inducible boot fault, and writing `/qspi/config.py` then reaches F-15's confirmed pre-PIN import on every normal boot. FatFs and native USB/SD memory safety is unreviewed. |
 | Can firmware signature verification be bypassed? | Not by breaking the algorithm: the verifier and the tool/device message construction are sound. But **F-17** can harvest valid authorization through message signing, **F-25** accepts forged CRC records after direct flash write, and **F-33** lets an unsigned SD file clear WRP even though its bytes remain blocked from immediate execution (PATH-23). |
@@ -5400,15 +7234,15 @@ prerequisite or coverage limit that static inspection did not settle.
 | Can RAM remnants after shutdown be exploited? | Unknown, and not answerable from static review. Structurally, no secret is ever zeroized: they are immutable Python `str`/`bytes` under a GC, and there is no wipe of a secret buffer anywhere in `src/`. |
 | Is entropy weak or predictable? | **Conditionally yes.** F-18 confirms that the TRNG driver returns zero-valued words on timeout and never checks the seed-error or clock-error flags. Seed generation becomes reproducible only if the failure persists and the software pool holds no attacker-unknown input. Prior touch timing or coordinates stay mixed into mnemonic-sized requests, so a transient fault does not imply an all-zero or attacker-known seed. Whether the peripheral faults in practice, and how much unpredictable touch state is present, needs hardware testing. |
 | Can an attacker manipulate ECDSA nonces? | **No.** Stock deterministic RFC6979, deterministic counter bytes for low-R grinding, and no host-controlled data anywhere in nonce derivation. Hardening gaps only: the context is never randomized (F-14), and H-09 is a latent memory-safety bug in an unreachable nonce helper. Physical side-channel and fault resistance is incomplete. |
-| Are address or transaction displays different from signed data? | **Yes. ✅ F-01 and ✅ F-02 confirmed divergences at v1.9.0 and are now fixed; F-11, F-21, and F-35 confirm divergences that remain. F-23 adds Liquid asset names. F-19 and F-24 confirm that the fee, input values, and warnings can be absent from the default view, and transaction version, locktime, and input sequences are absent from both views.** On the address layer the two networks differ. Bitcoin holds: `bech32.py` passes the complete BIP-173/350 vector set, Base58Check enforces its checksum, `Script.script_type()` pins the witness version to {0,1} and the program to {20,32} bytes, the displayed string comes from the parsed scriptPubKey and nothing else, and `format_addr` only inserts spaces and newlines with no truncation (PATH-34 to PATH-40). Liquid does not: **F-35** shows the confidential-address encoder is neither injective nor total, so four distinct scriptPubKeys render as one address and OP_RETURN renders as a well-formed `lq1…` address. **F-36** breaks the decode direction, and **H-25** turns a Liquid p2pkh output into an aborted confirmation screen. |
+| Are address or transaction displays different from signed data? | **Yes. F-03, F-11, F-21, and F-35 are confirmed divergences, and F-23 adds host-chosen Liquid asset names. F-19 and F-24 confirm that the fee, input values, and warnings can be absent from the default view, and that transaction version, locktime, and input sequences are absent from both views.** On the address layer the two networks differ. Bitcoin holds: `bech32.py` passes the complete BIP-173/350 vector set, Base58Check enforces its checksum, `Script.script_type()` pins the witness version to {0,1} and the program to {20,32} bytes, the displayed string comes from the parsed scriptPubKey and nothing else, and `format_addr` only inserts spaces and newlines with no truncation (PATH-34 to PATH-40). Liquid does not: **F-35** shows the confidential-address encoder is neither injective nor total, so four distinct scriptPubKeys render as one address and OP_RETURN renders as a well-formed `lq1…` address. **F-36** breaks the decode direction, and **H-25** turns a Liquid p2pkh output into an aborted confirmation screen. |
 | Can signatures or secret-derived material be obtained outside transaction confirmation? | **Yes, four ways.** Xpub and fingerprint with **no** confirmation (F-05). Up to 1000 raw TRNG bytes with **no** confirmation (F-14). A message signature at any path with one confirmation whose contents the host can partly hide (F-21). The SLIP-77 master blinding key with one confirmation. |
 | Can a message signature be reused as a transaction signature? | No for Bitcoin or Liquid consensus data. The 25-byte domain prefix sits exactly where a sighash preimage keeps hash output, so a collision needs about 2^168 work, and the length prefix covers the exact bytes hashed. **But the same prefix is deliberately shared with firmware authorization (F-17)**, so a message signature can be a valid firmware signature, which is a higher-value target than a transaction. |
 | Can a host obtain a signature at a derivation path the user did not intend? | **Yes.** F-04: derived keys are signed with no script-membership check, under any host-chosen path, over a sighash the host builds. A confirmation is shown, but it shows a transaction the user does not recognize as theirs. |
 | Can secure-element replacement bypass PIN or force weaker fallback? | **Yes.** A card reporting `PIN_UNLOCKED` suppresses the PIN and anti-phishing screen (F-22). An attacker card can inject a constant-key seed (F-07). Faults can force the weaker or destructive fallback (H-14). Card-controlled UART bytes reach native memory corruption before PIN entry (F-34). No path extracted the genuine card's existing seed. |
 | Can Liquid sign or disclose something Bitcoin would prevent? | **Yes.** The same root serves both networks. Liquid exposes the master blinding key (H-03, H-21), displays unverified amounts and host labels (F-11, F-23), renders addresses that do not identify the script being signed because its encoder lacks the script-type gate the Bitcoin encoder has (F-35 versus PATH-35), and its streaming rangeproof path adds pre-confirmation memory corruption (F-31). Whether a Liquid sighash can equal a Bitcoin sighash was not analysed. |
-| Do vendored or submodule trees have unexplained upstream divergence? | **Outer pins and identified vendored trees are resolved.** `embit` matches upstream `189efc4` minus three deletions, the generator table matches, LVGL is an upstream commit, and all 63 MicroPython fork commits were reviewed. **D-02 remains:** several large native trees flattened inside the MicroPython fork have no recorded upstream SHA, so their provenance cannot be reconstructed. |
+| Do vendored or submodule trees have unexplained upstream divergence? | **Unresolved, and not currently answerable from the repository.** Two positives: the checked-in secp256k1 generator table was recomputed entry by entry and matches, and all 63 MicroPython fork-only commits were reviewed. Against that, six of eight submodule URLs point at forks under one GitHub org and carry `branch =` declarations, and nothing in the tree records how those pins relate to upstream (§1.2, PATH-18). **D-02 adds** several large native trees flattened inside the MicroPython fork with no recorded upstream SHA, so their provenance cannot be reconstructed at all. No evidence of tampering was found anywhere it could be checked; this is a provenance gap, not a tampering result. |
 | Could a malicious contributor add covert exfiltration that survives the build? | **Not ruled out.** Strong hiding places include `mpy-cross -O` removing assert validation (H-13), writable-path import resolution (F-15), warning removal (H-22), and provenance-free dependency flattening (D-02). The repository has no CI or CODEOWNERS control at this tag, and empirical release reproduction is absent. |
-| Is released firmware independently reproducible? | **Expected yes for v1.9.0, but not independently verified here.** Static inspection found a deterministic Docker route: the base image and toolchain input are fixed, Python packages are version- and hash-pinned, MicroPython emits fixed build metadata, source traversal is sorted, the container build path is fixed, and packaging injects no timestamp, randomness, or host Git metadata. Reproducing the signed upgrade also requires importing the same published signatures in the same order. No two-build or official-release binary comparison was performed. |
+| Is released firmware independently reproducible? | **Expected yes, but not independently verified here.** Static inspection found a deterministic Docker route: the base image and toolchain input are fixed, Python packages are version- and hash-pinned, MicroPython emits fixed build metadata, source traversal is sorted, the container build path is fixed, and packaging injects no timestamp, randomness, or host Git metadata. Reproducing the signed upgrade also requires importing the same published signatures in the same order. No two-build or official-release binary comparison was performed. |
 | Could the repository contain a non-obvious backdoor? | No deliberate backdoor was found. The Python source has no eval, process, or network implant, but F-15 proves that ordinary import can execute unauthenticated QSPI code, and D-02 shows that large flattened native trees cannot be reproduced from recorded upstream pins. All 63 MicroPython fork commits and the secp binding were reviewed. Full LVGL, FatFs, and HAL content, and release reproduction, remain open. |
 | Which questions cannot be answered from static source alone? | RAM remnants, the hardware half of the entropy question, practical RDP/WRP and boot-fault behavior, target memory effects of F-31 and F-32, external applet behavior, and whether official release binaries reproduce exactly. Supported-path downgrade prevention is answered statically (PATH-24, PATH-26). |
 
@@ -5416,15 +7250,13 @@ prerequisite or coverage limit that static inspection did not settle.
 
 ### 12.1 Priority
 
-1. ~~**Emergency.** Reject all PSBT version-incompatible fields and enforce
-   display/global-transaction equality before any confirmation or signing. This
-   single change closes ✅ F-01 and ✅ F-02 together. Fix them as one change even though
-   they are rated differently; they share the root cause.~~
-   **Done upstream.** The `embit` v0.8.2 `PSBTScope.read_from` version guard rejects
-   the incompatible fields, closing ✅ F-01 and ✅ F-02. The second half of this item —
-   enforcing display/global-transaction equality **in this repository** — is still
-   not implemented; see item 8's defense-in-depth check. Item 2 is now the highest
-   open priority.
+1. **First, and nearly free: close the branch gap.** Cherry-pick `7223458`,
+   `fc0e32d`, and `3d1bb8e` from `origin/master`, or rebase this branch onto it.
+   That closes DOC-02, DOC-03, and part of F-24 with code that is already
+   written, reviewed, and merged upstream of this branch, and it makes the
+   shipped `docs/security-info.md` true rather than aspirational. Then diff the
+   remaining 30 commits for security content (§1.3). Nothing else in this list
+   has a comparable cost-to-benefit ratio.
 2. **Emergency, process.** Stop signing releases with a key that can also be used
    by the generic message app, and give firmware authorization its own domain
    separator (F-17). The interim mitigation — a dedicated release key on a
@@ -5440,7 +7272,11 @@ prerequisite or coverage limit that static inspection did not settle.
    exporting wallet partitions in any fault state (F-32). Remove writable module
    roots, the empty import entry, and the executable `config` override (F-15).
 6. **High.** Enforce previous-transaction verification (F-03) and equivalent
-   script-membership checks for every signing key (F-04).
+   script-membership checks for every signing key (F-04). In the same pass, add
+   the scope-to-global-output equality check in this repository's wallet manager
+   and a regression test that pins the parser's v2-field rejection (H-27) — the
+   invariant the whole confirmation screen rests on is currently enforced only
+   in a dependency tracked through a fork pin.
 7. **High.** Stop trusting the card's PIN state, pin card identity, and correct
    the native receive bound before doing further smartcard work (F-22, F-07,
    F-34). Fix PPS checksum validation in the same change (H-23).
@@ -5471,40 +7307,42 @@ prerequisite or coverage limit that static inspection did not settle.
 14. **Secret and UI hardening.** Remove QR stdout leakage (H-18). Sanitize wallet
     names (H-19). Warn and reauthenticate before GUI blinding-key export (H-21).
     Define and implement complete QSPI wipe semantics (H-24).
-15. **Build and dependency hardening.** Restore `-Wall` (H-22). Replace the
-    compiler MD5 pin (F-09). Record upstream SHAs for flattened trees (D-02).
-    Refresh the release-tool lock (D-03). Automate generator and provenance
-    checks.
-16. **Planning.** Maintain an explicit security-backport policy for the 2019
+15. **Documentation, and cheap.** Fix the incorrect security claims in
+    `docs/security-info.md`. DOC-01 — the self-contradicting offline-brute-force
+    bullet — is a one-paragraph rewrite and is a genuine documentation defect,
+    present on `origin/master` too. DOC-02 and DOC-03 are resolved by item 1
+    rather than by editing; edit them only if the cherry-pick is rejected. All
+    three are shipped user-facing claims, so they rank above the remaining build
+    hardening.
+16. **Build and dependency hardening.** Restore `-Wall` (H-22). Replace the
+    compiler MD5 pin (F-09). Record upstream SHAs for flattened trees (D-02) and
+    the upstream relation for the six forked submodules (§1.2, PATH-18). Refresh
+    the release-tool lock at `cryptography==3.4.8` (D-03). Decide the
+    `branch =` / fork-URL question and assert it in CI. Automate the generator
+    and provenance checks.
+17. **Planning.** Maintain an explicit security-backport policy for the 2019
     MicroPython base (D-01).
-17. **Assurance.** Complete the target, hardware, release, and reproducibility
+18. **Assurance.** Complete the target, hardware, release, and reproducibility
     tests, and continue below the application adapters into FatFs, mount
     handling, and the native SD and USB drivers.
 
 ### 12.2 Disclosure routing
 
-✅ F-01, ✅ F-02, F-03, F-04, and F-10 are defects in vendored `embit`
-(`f469-disco/libs/common/embit/`), not in this repository's own application code.
-This repository is one consumer of that library. So the remediation owner and the
-disclosure path differ from the rest of this report:
+F-04 and F-10 are defects in `embit` (`f469-disco/libs/common/embit/`), not in
+this repository's own application code. F-03 is this repository's — a discarded
+return value in `manager.py`. This repository is one consumer of that library,
+so the remediation owner and the disclosure path differ from the rest of this
+report:
 
-> **Current tree:** ✅ F-01 and ✅ F-02 no longer need disclosure — upstream fixed
-> them, and the tree now pins embit v0.8.2, which carries the fix. **F-04 and F-10
-> still do.** F-03 is a discarded return value in this repository's
-> `manager.py`, so it is ours to fix, not upstream's. Note also that `embit` is now
-> a submodule pointing at a **fork**, not the vendored upstream tree this section
-> assumes; route upstream disclosure to the real `embit` project. See AD-06 in
-> [audit-comparison.md](audit-comparison.md).
-
-- The version-consistency fix for ✅ F-01 and ✅ F-02 belongs in `embit`'s `psbt.py`
-  and `psbtview.py`. Every downstream consumer of the same code is affected the
-  same way, not only Specter-DIY. **This fix has landed upstream.**
-- The vendored tree is byte-identical to upstream `embit` at `189efc4`. These are
-  **upstream defects reproduced verbatim**, not local modifications. Handle ~~✅ F-01,
-  ✅ F-02,~~ F-04 and F-10 as a **coordinated disclosure to the `embit`
-  maintainers first**, on normal embargo terms, before any public Specter-DIY
-  writeup. ~~Check whether `embit` `master` has since fixed them before setting the
-  embargo clock.~~ Checked: ✅ F-01 and ✅ F-02 are fixed upstream; F-10 is not.
+- Handle **F-04 and F-10** as a coordinated disclosure to the `embit`
+  maintainers first, on normal embargo terms, before any public Specter-DIY
+  writeup. Every downstream consumer of the same code is affected the same way,
+  not only Specter-DIY. Check whether upstream has already fixed them before
+  setting the embargo clock.
+- Route that disclosure to the **upstream `embit` project**, not to the fork
+  this tree's submodule URL points at (§1.2). Whether the fork's `v0.8.2` is
+  identical to upstream's is not established here (PATH-18); establish it before
+  assuming an upstream fix would land in this tree.
 - F-28 and H-08 belong to `microur` in `f469-disco/libs/common/`, not to this
   repository's application code. F-13, F-31, H-01, H-09, H-16, and H-17 belong
   primarily to the `secp256k1-embedded` binding fork; F-31 also needs a
@@ -5520,18 +7358,15 @@ disclosure path differ from the rest of this report:
   MicroPython storage and import integration. F-34 and H-23 belong to the
   `f469-disco` smartcard user module. H-22 and D-01/D-02 belong to the
   MicroPython fork, and D-03 to the bootloader tools dependency lock.
-- F-35, F-36, and H-25 belong to vendored `embit`
+- F-35, F-36, and H-25 belong to `embit`
   (`liquid/blech32.py`, `liquid/addresses.py`), with unguarded call sites in this
   repository. H-26 is an upstream hardening item.
 - Independently of upstream timing, this repository can and should add the
-  defense-in-depth check named in ✅ F-01's remediation: compare each displayed scope
-  `(value, script_pubkey)` against the exact global transaction output that will be
-  signed, in `src/apps/wallets/manager.py`. That check lives in code this project
-  owns, it does not depend on the upstream fix landing, and it would have blocked
-  both findings. **Still not implemented.** The upstream fix has landed, so this is
-  no longer the primary defense, but it is what would keep the invariant enforced
-  here rather than only in the dependency — and there is still no regression test
-  in `test/` covering the rejection.
+  defense-in-depth check in H-27: compare each displayed scope
+  `(value, script_pubkey)` against the exact global transaction output that will
+  be signed, in `src/apps/wallets/manager.py`, and add a regression test that
+  pins the rejection. That check lives in code this project owns and does not
+  depend on any upstream timeline.
 
 ## 13. Scope closure
 
@@ -5559,10 +7394,10 @@ disclosure path differ from the rest of this report:
    interruption.
 8. Behavior of the fail-closed wipe-on-flash-write-failure path under induced
    hardware faults (F-06).
-9. MicroPython-specific memory behavior for the PSBT findings. The ✅ F-01 and ✅ F-02
-   proofs were produced under CPython and establish parser semantics, not
-   on-device memory behavior. The same limit applies to the fix verification: the
-   rejection was confirmed under CPython, not on target.
+9. MicroPython-specific memory behavior on the PSBT path. The parser results
+   here establish semantics read from source and confirmed under CPython, not
+   on-device memory behavior. PATH-41's rejection in particular has not been
+   exercised on target.
 10. Whether F-19's arithmetic holds on the real display. The layout is settled
     statically; only the exact per-output pixel cost is estimated.
 11. Whether LVGL's `lv_label_set_text` truncates at an embedded NUL on target
@@ -5577,30 +7412,27 @@ Answered:
    historical repository names `littlevgl/lvgl` and
    `ElementsProject/secp256k1-zkp` redirect to `lvgl/lvgl` and
    `BlockstreamResearch/secp256k1-zkp`, where the exact pinned objects resolve.
-2. **Vendored `embit` does not diverge from upstream.** All 41 `.py` files were
-   hashed and matched against the full upstream history. A whole-tree diff against
-   upstream `189efc4` produces no "files differ" line at all, only three deletions
-   (`finalizer.py`, `liquid/finalizer.py`, `util/`). ✅ F-01, ✅ F-02, F-03, F-04, and
-   F-10 are therefore upstream `embit` defects reproduced verbatim, which settles
-   the disclosure path in Section 12. The tree has since moved to an `embit`
-   submodule at v0.8.2, which carries the upstream fix for ✅ F-01 and ✅ F-02; F-10
-   is unfixed there, and the content-identity finding above no longer describes
-   this tree (AD-06 in [audit-comparison.md](audit-comparison.md)).
-3. **The checked-in `ecmult_static_context.h` is canonical.** It is the
+2. **The checked-in `ecmult_static_context.h` is canonical.** It is the
    `ecmult_gen` table, on the signing path, and all 1024 entries were recomputed
    from `gen_context.c`'s construction — the nums point from the ASCII seed
    `"The scalar for this x is unknown"` with even y, plus G, then the gbase and
    numsbase ladder with the `j == PREC_N-2` negation — and match exactly.
-4. **MicroPython diverges by 63 commits from a v1.12-era base** (D-01), and all
+3. **MicroPython diverges by 63 commits from a v1.12-era base** (D-01), and all
    63 fork-only diffs were inspected. **LVGL does not diverge**; its pin is an
    upstream commit from 2019-10-29.
-5. **The operative nested `secp256k1-zkp` pin resolves upstream.** The wrapper at
+4. **The operative nested `secp256k1-zkp` pin resolves upstream.** The wrapper at
    `f469-disco/usermods/secp256k1` compiles the nested library at `d9560e0`, and
    the old `ElementsProject` URL redirects to the current upstream repository
    containing that exact commit.
 
 Open:
 
+5. **The upstream relation of the six forked submodules** — `f469-disco`,
+   `specter-bootloader`, `micropython`, `secp256k1-embedded`, `embit`, and
+   `fatfs`. Nothing in the tree records whether each pin is identical to, ahead
+   of, or diverged from the corresponding upstream commit (§1.2, PATH-18).
+   `embit` is the priority: it owns F-04, F-10, F-35, F-36, H-26, and the
+   PATH-41 invariant.
 6. The source and exact upstream commits of the flattened MicroPython `lib/`
    trees, especially the STM32 HAL, TinyUSB, FatFs, and mbedTLS (D-02).
 7. End-to-end content review of the upstream borromean, surjection, and generator
@@ -5608,7 +7440,7 @@ Open:
 8. Which key set and protection configuration the official release binaries were
    built with, and whether two clean Docker builds reproduce each other and the
    official binaries. Static inspection found no deterministic blocker in the
-   v1.9.0 Docker route.
+   Docker route.
 
 ### 13.3 Tier 1 components and their remaining gaps
 
@@ -5673,37 +7505,40 @@ Stated plainly, as gaps rather than as coverage:
 
 In priority order:
 
-1. **Route F-17 and F-25 to the release-key holders before anything else is
+1. **Close the branch gap against `origin/master`** (§1.3). Three security
+   changes that exist in this repository are absent from this branch, and the
+   shipped security documentation already describes them. This is the cheapest
+   item in the report and it retires DOC-02, DOC-03, and part of F-24.
+2. **Route F-17 and F-25 to the release-key holders before anything else is
    published.** F-17's mitigation is available today without a code change, and
    publishing the report describes the attack.
-2. **Run the first test in Section 10.2** — the F-21 NUL test on hardware. It
+3. **Run the first test in Section 10.2** — the F-21 NUL test on hardware. It
    costs one photograph and settles a High finding.
-3. **Write the Section 10.2 regression tests.** The upstream remediation has
-   already landed, so these are now *retrospective* tests, and they matter more for
-   that reason: nothing in `test/` currently pins the ✅ F-01 / ✅ F-02 rejection, so a
-   future submodule bump can silently undo it. Cover crafted v0 PSBTs carrying each
-   v2-only key in every field order, including duplicate `0x0f` records and both
-   ✅ F-01 variants.
-4. **Open coordinated disclosure with the `embit` maintainers** for F-04 and F-10,
-   which are upstream code reproduced verbatim and still unfixed. ~~✅ F-01, ✅ F-02~~
-   are fixed upstream. F-03 is this repository's own defect, not upstream's.
-5. **Route F-35 and F-36 to the `embit` maintainers together with the PSBT
+4. **Write the Section 10.2 regression tests.** Nothing in `test/` currently
+   pins the v2-field rejection that PATH-41 rests on, so a future submodule bump
+   can retire it silently (H-27). Cover crafted v0 PSBTs carrying each v2-only
+   key in every field order, including duplicate `0x0f` records.
+5. **Open coordinated disclosure with the `embit` maintainers** for F-04 and
+   F-10, and establish first whether the fork this tree pins matches upstream
+   (PATH-18). F-03 is this repository's own defect, not upstream's.
+6. **Route F-35 and F-36 to the `embit` maintainers together with the PSBT
    items.** Restoring the four commented-out checks in `blech32.decode` and adding
    a `script_type()` gate to `addresses.address` closes F-35, F-36, and H-25 in
    one change. Then take the *taproot output-key tweak* and Miniscript/TapTree
    script construction to Deep, since those determine the `p2tr` program this
    encoder renders.
-6. **Continue the SD and USB trace below the reviewed Python adapters.** Inspect
+7. **Continue the SD and USB trace below the reviewed Python adapters.** Inspect
    FatFs, mount handling, filesystem edge cases, and the native SD and USB
    drivers, then fuzz malformed files and filenames on target.
-7. **Run the new native exploit and fault regressions.** Reproduce F-31 on
+8. **Run the native exploit and fault regressions.** Reproduce F-31 on
    target, exercise F-34 with a smartcard emulator and the release compiler, and
    test F-32's I2C fault plus the read-write MSC chain into F-15.
-8. **Restore dependency and build assurance.** Record upstream SHAs for flattened
-   MicroPython native trees (D-02), restore `-Wall` (H-22), refresh the release
+9. **Restore dependency and build assurance.** Record upstream SHAs for
+   flattened MicroPython native trees (D-02) and the upstream relation for the
+   six forked submodules (§1.2), restore `-Wall` (H-22), refresh the release
    tooling lock (D-03), and add CI attestation.
-9. **Defer remaining hardware, physical, and side-channel work** (13.1) to a
-   follow-up with device access. Static review cannot advance it further.
+10. **Defer remaining hardware, physical, and side-channel work** (13.1) to a
+    follow-up with device access. Static review cannot advance it further.
 
 ## 14. Scope conformance
 
@@ -5719,7 +7554,7 @@ hardware, an external component, or release artifacts.
 | Highest-risk theft paths | Complete | Sections 2, 3, 6, 8, and 11 give a finding, a blocking mechanism, or an explicit unresolved prerequisite for every prioritized path | Hardware prerequisites stay conditional where stated |
 | Negative results and static-analysis limits | Complete | Section 5 records inspected paths, evidence, open questions, and recommended tests per component. Section 9 gives reproducible negative results and cross-cutting limits | Hardware and external-component questions stay explicitly unresolved rather than inferred |
 | Full-form positive findings | Complete | Every `F-*` block records the required classification fields with the enumerated Status, Severity, access-flag, and Confidence values | Expanded prose may keep more nuanced confidence discussion |
-| Short-form blocked and adequately handled paths | Complete | Section 9 contains PATH-01 to PATH-40 with evidence, enforcing mechanism, residual risk, and confidence | Each result is scoped only to the reviewed path |
+| Short-form blocked and adequately handled paths | Complete | Section 9 contains PATH-01 to PATH-41 with evidence, enforcing mechanism, residual risk, and confidence | Each result is scoped only to the reviewed path. PATH-18 does not hold and is recorded as a negative result; PATH-16 holds only in its narrow form |
 | Eight-column coverage report | Complete | Section 5 uses the required schema and only Shallow, Moderate, or Deep values | Shallow rows are substantive engagement gaps |
 | Hostile-input source mapping | Complete | Section 4.4 gives an explicit source → gate → parser → operation map, and Section 4.5 the full host and APDU command inventory | Native-driver and external-scanner internals stay coverage gaps, not unmapped inputs |
 | Malicious-code, backdoor, and static-indicator review | Partial | Section 8.1 closes the application Python sweep, all 63 MicroPython fork commits, and the secp binding, and names the concrete hiding places | Flattened native trees lack provenance and full content review. External scanner firmware and empirical release attestation stay open |
@@ -5727,8 +7562,8 @@ hardware, an external component, or release artifacts.
 | Secret-lifetime audit | Complete for static source | Section 4.6 gives a per-secret create, transform, store, display, cache, and destroy matrix. Section 8.3 records lock-versus-erasure semantics | Physical RAM/SDRAM remanence and fault readout cannot be resolved statically |
 | Persistent-storage and keystore audit | Partial | Every local keystore, the native and host smartcard stack, wipe paths, flash and QSPI layout, and backend selection produced F-06, F-07, F-22, F-34, H-10, H-11, H-12, H-14, H-24 | Physical readout, rollback, remanence, fault injection, and external applet behavior need target work |
 | Firmware and bootloader audit | Complete for static source | The entire bootloader core, plus section, integrity, signature, KAT, mailbox, startup, flash-map, and tool paths were traced. F-25, F-33, H-20, and PATH-23 to PATH-29 record the result | Real option bytes, power-cut timing, SD HAL/FatFs, LCD, and physical faults stay dynamic |
-| Parser audit | Partial | PSBT/PSET scopes, QR and UR paths, and the address and encoding family produced ✅ F-01, ✅ F-02, F-03, F-04, F-10, F-11, F-16, F-28, F-35, F-36, H-08, H-13, H-15, H-25, H-26, and PATH-34 to PATH-40 | `transaction.py`, Miniscript/TapTree, Liquid proof, BCUR, FatFs, and native driver parsers are incomplete |
-| Transaction-signing audit | Partial | The principal Bitcoin display-to-sighash path is deep and produced the Critical result. The address half of display-to-output correspondence is closed for both networks (PATH-39, F-35) | Advanced policies, full Liquid processing, and target display rendering stay open |
+| Parser audit | Partial | PSBT/PSET scopes, QR and UR paths, and the address and encoding family produced F-03, F-04, F-10, F-11, F-16, F-28, F-35, F-36, H-08, H-13, H-15, H-25, H-26, and PATH-34 to PATH-41 | `transaction.py`, Miniscript/TapTree, Liquid proof, BCUR, FatFs, and native driver parsers are incomplete |
+| Transaction-signing audit | Partial | The principal Bitcoin display-to-sighash path is deep and produced F-03, F-04, F-30, PATH-41, and H-27. The address half of display-to-output correspondence is resolved for both networks (PATH-39, F-35) | Advanced policies, full Liquid processing, and target display rendering stay open |
 | Multisignature audit | Partial | Bootloader multisignature verification and the descriptor ownership and script-replacement path are covered | Full wallet Miniscript/TapTree construction, ordering, threshold, and malformed-policy behavior stay shallow |
 | Message signing and secret-derived export | Complete for application dispatch | All application modules were read. Message signing, xpub and fingerprint, entropy, BIP85 reachability, SLIP77, wallet export, and backups are assessed | Unread BIP85 and SLIP77 internals and target rendering details are disclosed separately |
 | Secure element and smartcard | Partial | Host-side identity, channel, PIN, storage, and fallback, plus the native UART and T=1 receive paths, are deep (F-07, F-22, F-34, H-23) | External applet source, deployed-card behavior, and the exact F-34 stack effect stay unavailable or dynamic |
@@ -5739,9 +7574,9 @@ hardware, an external component, or release artifacts.
 | Simulator, hardware, and physical attack | Not statically answerable in full | Production and simulator separation and hardware-specific attack prerequisites are recorded | No hardware was accessed. Simulator, HWI, test, and demo content is shallow |
 | Fault handling and recovery | Partial | Ignored verification, RNG timeout, callbacks, channel errors, fallback, boot faults, wipe, mailbox, WRP, and interrupted update were traced | Watchdog and reset breadth, and induced hardware-fault behavior, stay open |
 | Control-flow-oriented audit | Partial | Every application module, the whole bootloader, the whole secp binding, the native smartcard path, and the critical runtime and import callers were traced | General interpreter, HAL, and native-driver callers and external firmware are incomplete |
-| Security-model differential | Complete | Section 8.10 checks all 23 independently testable `docs/security.md` claims and performs the reverse comparison | External hardware claims are marked conditional rather than inferred |
-| Historical audit | Partial | All 63 MicroPython fork diffs and the security-sensitive regions of project history were reviewed. Findings include F-15, H-22, D-02 | The full 599-commit project history was not read commit by commit, and signer identity could not be cryptographically verified |
-| Dependency and submodule trust | Partial | Outer pins and origins, embit equivalence, LVGL, the full MicroPython fork delta, the secp binding, the generator table, and the release lock were assessed | Flattened native trees lack upstream SHAs (D-02). Full advisory and backport review and official artifact reproduction remain |
+| Security-model differential | Complete | Section 8.10 checks all 42 independently testable `docs/security-info.md` claims against the implementation, performs the reverse comparison, and records DOC-01, DOC-02, and DOC-03 | External hardware claims are marked conditional rather than inferred. Four of the contradictions trace to the branch gap in §1.3 rather than to a documentation error |
+| Historical audit | Partial | All 63 MicroPython fork diffs and the security-sensitive regions of project history were reviewed, and the branch's relation to `origin/master` was established (§1.3). Findings include F-15, H-22, D-02, DOC-02, DOC-03 | The full project history was not read commit by commit, the 30 remaining `HEAD..origin/master` commits were not individually assessed, and signer identity could not be cryptographically verified |
+| Dependency and submodule trust | Partial | Outer pins and origins, LVGL, the full MicroPython fork delta, the secp binding, the generator table, and the release lock were assessed | Flattened native trees lack upstream SHAs (D-02). Upstream equivalence is not established for the six forked submodules, which also carry `branch =` declarations (§1.2, PATH-18). Full advisory and backport review and official artifact reproduction remain |
 | Final funds-theft analysis | Complete | Section 11 maps all 14 attacker capabilities to the strongest identified path and prevention result | Conditional prerequisites are explicit |
 | Malicious-maintainer analysis | Partial | Section 8.1 ranks and demonstrates effective hiding places (F-15, H-22, D-02) and assesses the absent isolation, CI, and review controls | Full flattened-tree content, signer trust, and independent release reproduction stay open |
 | Final questions and report structure | Complete | Section 11.1 answers every question, including static limits. Result classes and domain assessments have separate headings | None |
