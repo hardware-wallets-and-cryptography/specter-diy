@@ -737,7 +737,7 @@ plan.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** Every input amount that contributes to the
   displayed fee must be authenticated before signing.
-- **Owning codebase:** This repository and `embit`.
+- **Owning codebase:** This repository, `embit` submodule.
 
 **Evidence**
 
@@ -871,7 +871,7 @@ else the target key signs.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** A derived private key must sign only when its
   public key is authorized by the input script or by an explicit wallet policy.
-- **Owning codebase:** `embit` plus this repository.
+- **Owning codebase:** This repository, `embit` submodule.
 
 **Evidence**
 
@@ -1151,7 +1151,7 @@ production configuration with stronger hardware-backed readout protection.
 - **Security property violated:** Firmware authorization signatures must be
   domain-separated from generic user-message signatures and must communicate
   release intent.
-- **Owning codebase:** This repository and the bootloader submodule.
+- **Owning codebase:** This repository, `bootloader` submodule.
 
 **Evidence**
 
@@ -1604,8 +1604,8 @@ not previously paired.
 - **Security property violated:** Attacker-declared lengths must be validated
   before they bound a native write, and writes into a preallocated arena must
   stay inside that arena.
-- **Owning codebase:** The `secp256k1-embedded` binding fork, plus the
-  unvalidated call site in this repository.
+- **Owning codebase:** The unvalidated call site in this repository,
+  `secp256k1-embedded` submodule.
 
 **Evidence**
 
@@ -2164,7 +2164,7 @@ build hardening, and the key-selection guard fails closed.
 - **Security property violated:** Release artifacts should identify their trust
   root, and production storage protection should match the claimed physical
   threat model.
-- **Owning codebase:** This repository and the bootloader submodule.
+- **Owning codebase:** This repository, `bootloader` submodule.
 
 **Evidence**
 
@@ -2340,7 +2340,7 @@ desynchronization; Medium for the security impact.
 - **Deterministic or probabilistic:** Deterministic parser difference.
 - **Security property violated:** Every parsing and normalization pass must
   enforce identical field boundaries and canonical scope contents.
-- **Owning codebase:** `embit`.
+- **Owning codebase:** `embit` submodule.
 
 **Evidence**
 
@@ -2460,7 +2460,7 @@ passes to produce the same scope boundaries and key set.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** Displayed Liquid amounts and assets must be
   verified against the confidential commitments being signed.
-- **Owning codebase:** This repository and `embit`.
+- **Owning codebase:** This repository, `embit` submodule.
 
 **Evidence**
 
@@ -2566,7 +2566,7 @@ unknown and unblinded, and do not compute a trusted input summary from them.
   `config.py` or `config.mpy`.
 - **Security property violated:** Signed firmware must not load unauthenticated
   executable code from attacker-writable persistent storage.
-- **Owning codebase:** This repository plus the pinned MicroPython fork.
+- **Owning codebase:** This repository, `micropython` submodule.
 
 **Evidence**
 
@@ -2727,8 +2727,8 @@ persistence and on whether the attacker knows the accumulated pool state.
   is deterministic once the fault and the pool state are fixed.
 - **Security property violated:** Entropy-source failure must be detected, and
   seed generation must fail closed.
-- **Owning codebase:** The pinned `micropython` fork, and this repository for
-  the missing health check above it.
+- **Owning codebase:** This repository for the missing health check,
+  `micropython` submodule.
 
 **Evidence**
 
@@ -3276,7 +3276,7 @@ flash-write prerequisite keeps this at Medium.
   available.
 - **Security property violated:** Firmware authenticity established during
   upgrade must stay cryptographically enforced at every boot.
-- **Owning codebase:** The bootloader submodule and platform integration.
+- **Owning codebase:** `bootloader` submodule, platform integration.
 
 **Evidence**
 
@@ -3399,8 +3399,7 @@ start and every upgrade exit.
 - **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** Multipart transport data must be authenticated
   against both per-part and message-level checksums before dispatch.
-- **Owning codebase:** `f469-disco/libs/common/microur`, consumed by this
-  repository.
+- **Owning codebase:** This repository, `f469-disco/libs/common/microur`.
 
 **Evidence**
 
@@ -3650,7 +3649,7 @@ and make Cancel the affirmative button.
 - **Security property violated:** Hardware protection removed for an operation
   must be restored if authorization fails, and unauthenticated input must not
   permanently weaken the device.
-- **Owning codebase:** The bootloader submodule and STM32 platform integration.
+- **Owning codebase:** `bootloader` submodule, `STM32` platform integration.
 
 **Evidence and ordering**
 
@@ -3794,8 +3793,7 @@ erase-and-copy stage. Report protection state on failure.
   accumulate 33 queued bytes before a blocking drain.
 - **Security property violated:** A replaceable secure-element peer must not
   write beyond native receive buffers before authentication.
-- **Owning codebase:** The `diybitcoinhardware/f469-disco` smartcard user
-  module.
+- **Owning codebase:** `f469-disco` submodule smartcard user module.
 
 **Evidence**
 
@@ -4217,7 +4215,7 @@ immutable release URL. Prefer authenticated, reproducible toolchain inputs.
 - **Security property violated:** Cryptographic internal errors and allocation
   failures should terminate safely rather than return invalid state to native
   callers.
-- **Owning codebase:** The `secp256k1-embedded` binding fork.
+- **Owning codebase:** `secp256k1-embedded` submodule.
 
 **Evidence**
 
