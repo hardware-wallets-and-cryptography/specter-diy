@@ -166,87 +166,40 @@ carry/carries **some** of `origin/master`'s work forward and leaves the rest beh
 `git diff --stat HEAD origin/master -- src/ boot/ test/` reports `____` files and
 `____` insertions.
 
-Carried forward into this tree:
-
-| Change | Evidence here |
-| --- | --- |
-| `embit` submodule at v0.8.2 (#376) | Rejects v2-only scope fields in a v0 PSBT |
-| TRNG dead-output rejection (#370, #372) | `_looks_dead` in [rng.py:45-91](../../src/rng.py#L45-L91) |
-| Security-documentation rewrite (#373) | [docs/security-info.md](../../docs/security-info.md) |
-
-Left behind, all security-relevant, all present on `origin/master`:
-
-| Missing change | Consequence in this tree |
-| --- | --- |
-| `7223458` "Re-add mixed-inputs warning for multi-wallet transactions" (#382) | No mixed-inputs warning exists. DOC-02 |
-| `fc0e32d` "Fix change-output classification to require verified descriptor derivation" (#387) | Change classification does not check the derivation branch, and the `Invalid change metadata!` warning does not exist. DOC-03 |
-| `3d1bb8e` "Show Transaction Version, Locktime and inputs' sequences when signing transactions" (#321) | Version, locktime, and input sequences are rendered on neither confirmation page. F-24 |
-| `a5c9926` "Expand detection of possible multisig descriptors & Add data input parsing CI tests" (#301) | Only the `src/apps/wallets/manager.py` hunk is missing; the commit's tests are present. `parse_stream` still gates on `b"&" in data`, so a raw `wsh(`/`sh(`/`tr(` descriptor without a name is not recognised as `ADD_WALLET`. Verified by reverting the hunk alone: `test_raw_descriptor_is_parsed` fails |
-
-All four missing commits are reachable from `master`, `origin/master`, and
-`origin/dev`:
+The native suite imports and runs:
 
 ```text
-git merge-base --is-ancestor fc0e32d HEAD   ->  false
-git merge-base --is-ancestor 7223458 HEAD   ->  false
-git merge-base --is-ancestor 3d1bb8e HEAD   ->  false
-git merge-base --is-ancestor a5c9926 HEAD   ->  false
-git branch -a --contains 7223458            ->  master, origin/master, origin/dev, ...
+Ran 76 tests in 10.502s
+FAILED (errors=2)
 ```
 
-The split is source-only: `git diff HEAD origin/master -- test/tests_native/`
-is empty. This branch already carries **every** test from these commits —
-`test_wallet_manager_warnings.py`, `test_change_classification.py`,
-`test_change_security.py`, `test_transaction_confirmation.py` and
-`test_wallet_manager_parsing.py` — while the `src/` changes they cover were
-left behind. The native suite therefore does not merely fail, it does not
-import at all:
+Both remaining errors are a test-harness incompatibility rather than a source
+defect: [test_transaction_confirmation.py:81](../../test/tests_native/test_transaction_confirmation.py#L81)
+and [:109](../../test/tests_native/test_transaction_confirmation.py#L109)
+reference `ast.Str`, removed in Python 3.12, and the host runs 3.14.7. The
+`ast.Constant` alternative already listed beside it covers those nodes.
 
-```text
-File "test/tests_native/test_change_security.py", line 19
-    from apps.wallets.manager import UNVERIFIED_CHANGE_WARNING
-ImportError: cannot import name 'UNVERIFIED_CHANGE_WARNING' from 'apps.wallets.manager'
-```
-
-Because `test/tests_native/__init__.py` re-exports every module, this single
-unresolved import masks the whole suite, including the `a5c9926` regression
-above.
-
-**This is the single highest-leverage item in the report.** Three findings —
-DOC-02, DOC-03, and part of F-24 — are not missing work; they are work that
-exists in this repository and is absent from this branch. Rebasing or
-cherry-picking closes them at no design cost. The `a5c9926` hunk carries no
-finding ID of its own: it is a latent failure of a test already committed
-here, surfacing as soon as the suite imports again.
-
-It also explains a discrepancy that would otherwise look like a documentation
-error. [docs/security-info.md](../../docs/security-info.md) was taken from
-`origin/master` and describes `origin/master`'s behaviour, including the
-mixed-inputs warning and the branch-checked change classification. On this
-branch the document is accurate about a codebase that is not the one shipping
-alongside it. `origin/master` has since renamed the file to `security-model.md`
-and added `docs/screenshots/mixed-inputs-warning-page1.png` and
-`-page2.png` — screenshots of the warning that this branch cannot produce.
-
-One artifact in the working tree is direct evidence of the same gap:
-`src/apps/wallets/__pycache__/manager.cpython-314.pyc` is untracked and
-contains both `Mixed inputs from different wallets!` and `Invalid change
-metadata! …`, neither of which appears in any `.py` file here.
+Two test modules are present but unreachable.
+`test/tests_native/test_message_signing_display.py` and
+`test/tests_native/test_signing_authorization.py` exist on this branch and not
+on `origin/master`, but neither is re-exported from
+`test/tests_native/__init__.py`, and `test/run_native_tests.py` dispatches via
+`unittest.main('tests_native')`. 287 lines of message-signing and
+signing-authorization tests therefore never execute.
 
 **Action plan.**
 
-1. Decide the intended relationship between this branch and `origin/master`. If
-   this branch is meant to ship, rebase it onto `origin/master` or pick up
-   `7223458`, `fc0e32d`, `3d1bb8e`, and `a5c9926` at minimum.
-2. Before assuming the list above is complete, diff the remaining 29 commits for
+1. Wire `test_message_signing_display` and `test_signing_authorization` into
+   `test/tests_native/__init__.py` so they run, and triage whatever they report.
+2. Replace `ast.Str` with `ast.Constant` in `test_transaction_confirmation.py`
+   so the suite reports green and real regressions are visible again.
+3. Before assuming this branch is caught up, diff the remaining 33 commits for
    security content:
 
    ```bash
    git log --oneline HEAD..origin/master
    git diff HEAD origin/master -- src/ boot/ test/
    ```
-3. Delete `__pycache__` from the working tree and confirm it is ignored, so a
-   stale artifact is never the only place a security behaviour exists.
 
 ## 2. Overall risk assessment
 
@@ -278,8 +231,9 @@ findings break it in different places:
 - F-35 on Liquid addresses.
 
 F-19 and F-24 then determine whether the user sees the remaining honest data
-at all — the fee and every warning sit below an attacker-chosen number of outputs
-in a scrolling container while the Confirm button stays fixed on screen.
+at all — the fee and every per-output warning sit below an attacker-chosen
+number of outputs in a scrolling container while the Confirm button stays fixed
+on screen.
 
 Boot-time and native paths add further weight. F-31 is a
 pre-confirmation out-of-bounds native write in the Liquid rangeproof path. F-32
@@ -304,14 +258,12 @@ render as well-formed confidential addresses. The two encoders are the same
 code with the Liquid copy's validity checks commented out, which makes this the
 cheapest High-value fix in the report.
 
-One structural observation sits above the individual findings, and it changes
-the remediation order. This branch is not a descendant of `origin/master`: it
-carries that branch's dependency bumps and its security documentation, but
-leaves behind three of its security fixes. Two findings below (DOC-02, DOC-03)
-and part of a third (F-24) exist only because of that gap, and the shipped
-`docs/security-info.md` describes controls the code on this branch does not
-have. Section 1.3 records it in full; it is the first item in the remediation
-priority in §12.1.
+**One structural observation sits above the individual findings**.
+This branch is still not a descendant of `origin/master`, but it carries that
+branch's security fixes for the wallet manager and the transaction screen.
+
+Section 1.3 records the current branch state and what remains to be checked
+across the `____` commits this branch is still behind.
 
 This report does not claim exhaustive repository security. Descriptor
 Miniscript and TapTree internals, Liquid issuance, flattened HAL/FatFs/USB
@@ -327,15 +279,15 @@ only partly reviewed or untested.
 | F (findings) | 29 | 0 | 8 | 16 | 5 | 0 |
 | H (hardening) | 25 | 0 | 0 | 0 | 23 | 2 |
 | D (dependency) | 3 | 0 | 0 | 0 | 0 | 3 |
-| DOC (doc-vs-code) | 3 | 0 | 0 | 2 | 1 | 0 |
-| **Total** | **60** | **0** | **8** | **18** | **29** | **5** |
+| DOC (doc-vs-code) | 1 | 0 | 0 | 0 | 1 | 0 |
+| **Total** | **58** | **0** | **8** | **16** | **29** | **5** |
 
 By severity:
 
 - **Critical:** none.
 - **High:** F-03, F-04, F-06, F-17, F-21, F-22, F-31, F-32.
 - **Medium:** F-05, F-07, F-08, F-10, F-11, F-15, F-18, F-19, F-23, F-24, F-25,
-  F-28, F-30, F-33, F-34, F-35, DOC-02, DOC-03.
+  F-28, F-30, F-33, F-34, F-35.
 - **Low:** F-09, F-13, F-14, F-16, F-36, H-01, H-03, H-05, H-06, H-08, H-09,
   H-10, H-11, H-12, H-13, H-14, H-15, H-16, H-17, H-18, H-19, H-20, H-21, H-22,
   H-23, H-24, H-25, H-27, DOC-01.
@@ -344,10 +296,6 @@ By severity:
 H-04 is a recorded negative result — a GUI preemption path that was examined
 and found sound. It is kept because the absence of a defect there is itself
 load-bearing for the confirmation model.
-
-**Three of these are cheaper than they look.** DOC-02, DOC-03, and part of F-24
-are fixed by code that already exists in this repository on `origin/master` and
-is simply absent from this branch. See §1.3.
 
 ### 3.1 Highest-priority theft paths
 
@@ -405,9 +353,9 @@ Ordered by attacker gain, then by impact.
     off after rejection. With flash write access, boot-time CRC32 records accept
     persistent replacement firmware.
 12. **Medium: F-19 — security-critical text scrolls while Confirm stays fixed.**
-    The fee and every in-transaction warning sit below an attacker-chosen number
-    of outputs in a scrolling container. The Confirm button is a fixed child of
-    the screen.
+    The fee and every per-output warning sit below an attacker-chosen number of
+    outputs in a scrolling container. The Confirm button is a fixed child of the
+    screen. The aggregated warning block is now drawn first and is exempt.
 13. **Medium: F-11 — Liquid input amounts and assets are displayed without
     checking their cleartext values and blinders against the confidential
     commitments.**
@@ -421,10 +369,11 @@ Ordered by attacker gain, then by impact.
     `a120…`, and `f120…` all render as one address string, and `6a14…`
     (OP_RETURN) renders as a well-formed `lq16…` address. The equivalent Bitcoin
     encoder is gated and holds.
-16. **Medium: F-24 — the transaction screen is incomplete by default.** Change
-    outputs are never labelled "change" anywhere (dead code), a gap-limit warning
-    is silently overwritten by the watch-only warning, and there is no fee sanity
-    check of any kind.
+16. **Medium: F-24 — the transaction screen is incomplete by default.** There is
+    no fee sanity check of any kind — no absolute threshold, no rate, no
+    percentage — so an extreme or negative fee renders as an ordinary line, and
+    change outputs are dropped from the default page without any count of what
+    was omitted.
 17. **Medium: F-18 — the native TRNG driver fails open.** `rng_get()` returns
     `0` after a 10 ms timeout and never inspects the seed-error or clock-error
     status bits, so a failed peripheral is indistinguishable from zero entropy
@@ -548,8 +497,7 @@ deliberately not relabelled as vulnerabilities.
 | Hardening | Low | F-09, F-13, F-14 |
 
 Section 7 holds the additional `H-*` observations. Dependency items D-01 to
-D-03 are in Section 8.9, and the three doc-vs-code items DOC-01 to DOC-03 are
-in Section 8.10.
+D-03 are in Section 8.9, and doc-vs-code item DOC-01 is in Section 8.10.
 
 ## 4. Components and trust boundaries
 
@@ -757,7 +705,7 @@ records what was actually read, not the wider directory that owns it.
 | Production runtime and platform glue | 2 | `boot/main/`, mount/CWD/import resolution, storage partitioning, wipe, RNG, native smartcard transport and T=1, manifest and freeze selection, board and build configuration | MicroPython, HAL, storage, display, USB, and native user modules run inside the trusted boundary | Moderate | F-15, F-18, F-32, F-34, H-22 to H-24, and exact-number, import, and storage behavior | Full FatFs, STM32 HAL/USB/SDMMC memory safety, general interpreter content, hardware timing and remanence | Exercise boot faults, QSPI implants, wipe recovery, malicious smartcards, malformed filesystems and USB, reset, and memory remnants |
 | Build, packaging, release, and CI | 2 | `Dockerfile`, `build_firmware.sh`, root and bootloader Makefiles, packaging tools, manifests, Nix and shell definitions, workflows | Selects source, toolchain, trust roots, signatures, and released artifacts | Deep | F-08, F-09, and static deterministic-build evidence | Official release provenance and empirical reproducibility | Run two clean cross-machine builds, import published signatures, and compare every release artifact hash |
 | Frozen/generated source and release artifacts | 2 | Manifest and generator inputs. The checked-in secp256k1 table was recomputed | Generated executable code and opaque release images can diverge from reviewed source | Moderate | All 1024 generator table entries matched. Deterministic inputs identified | No official release binary was obtained or compared | Recompute generated files during the build and compare clean builds with the official signed binaries |
-| Project security and build documentation | 2 | `docs/security-info.md` in full, build and reproducibility docs, bootloader docs | Defines the user-facing threat model and the release/security claims | Moderate | The claim-by-claim security-model differential in Section 8.10, including DOC-01 and DOC-02 | Some hardware claims are not statically attestable | Validate deployed option bytes, scanner firmware, and the published release procedure against hardware and artifacts |
+| Project security and build documentation | 2 | `docs/security-info.md` in full, build and reproducibility docs, bootloader docs | Defines the user-facing threat model and the release/security claims | Moderate | The claim-by-claim security-model differential in Section 8.10, including DOC-01 | Some hardware claims are not statically attestable | Validate deployed option bytes, scanner firmware, and the published release procedure against hardware and artifacts |
 | Dependency provenance | 2 | Recursive gitlinks, declared origins, upstream resolution, embit per-file hashes, the LVGL relation, generator-table construction | Detects substitution, mutable pins, unexplained forks, and opaque signing-path constants | Deep | All gitlinks resolve. embit and the generator table match. The LVGL relation is resolved. D-01 divergence measured | Official artifact provenance | Repeat provenance and generated-table checks automatically in CI |
 | Dependency content and known-issue exposure | 2 | All 63 MicroPython fork-only commits; the whole native secp binding and custom proof module; selected LVGL, FatFs, embit, microur, smartcard, storage, and build dependencies | Dependencies run in-process with keys or parse hostile data | Moderate | D-01 to D-03, F-31, F-34, H-16, H-17, H-22, H-23 | Flattened HAL/FatFs/USB trees lack upstream SHAs. Systematic upstream-advisory and backport review is incomplete | Restore provenance. Review advisories and backports. Fuzz native dependency boundaries on target |
 | Simulator | 2 | `simulate.py`, simulator manifest, platform, and GUI entry points, production-selection checks | Replaces entropy, storage, hardware, transport, and physical confirmation, and can mislead assurance | Moderate | The simulator is excluded from the production freeze path. Target-only H-16 ABI behavior identified | Full security-regression parity and target equivalence | Run every portable regression vector in the simulator, then repeat hardware-dependent results on target |
@@ -863,11 +811,15 @@ The return value is discarded. `grep -rn "is_verified" src/` returns **zero**
 hits, so the `embit` API built for exactly this purpose is never consulted, even
 though `InputScope.verify` sets `self._verified` at
 [psbt.py:297-299](../../f469-disco/libs/common/embit/src/embit/psbt.py#L297-L299).
+
 The Liquid manager makes the identical call at
 [liquid/manager.py:294](../../src/apps/wallets/liquid/manager.py#L294).
+
 Per-input values are drawn only on `page2`
-([transaction.py:87-112](../../src/gui/screens/transaction.py#L87-L112)), and
-`meta["warnings"]` is never populated on the Bitcoin path.
+([transaction.py:107-160](../../src/gui/screens/transaction.py#L107-L160)), and
+`meta["warnings"]` carries nothing about input verification or fee magnitude —
+`add_warnings` populates it for input provenance only
+([manager.py:989-1007](../../src/apps/wallets/manager.py#L989-L1007)).
 
 **Recommended fix**
 
@@ -2965,15 +2917,16 @@ self.message = add_label(message, scr=self.page)
 therefore reachable and enabled no matter how much of the content the user has
 seen.
 
-`TransactionScreen` appends into that same container in this order: outputs
-(lines 68-74), then the fee (76-88), then the aggregated warning block (90-94).
-The vertical position of the fee and of every warning is a function of the
-attacker-chosen output count. Each non-change output consumes roughly 180-200 px
-— a 28 pt value line, an optional label, a wrapped address at three lines of
-28 pt mono, plus 30 px and 10 px margins — against a visible page height of about
-640 px. Three outputs fill the viewport. Ten push the fee and every warning well
-below it. The per-output gap-limit and watch-only warnings sit in the same
-container.
+`TransactionScreen` appends into that same container in this order: the
+aggregated warning block (lines 68-71), then outputs (73-80), then the fee
+(82-92). The aggregated block is now first and is therefore visible without
+scrolling. The fee is not. Its vertical position, and that of every per-output
+gap-limit and watch-only warning, is a function of the attacker-chosen output
+count. Each non-change output consumes roughly 180-200 px — a 28 pt value line,
+an optional label, a wrapped address at three lines of 28 pt mono, plus 30 px
+and 10 px margins — against a visible page height of about 640 px.
+Three outputs fill the viewport. Ten push the fee and every per-output warning
+well below it.
 
 **What this does not affect**
 
@@ -3007,10 +2960,11 @@ self.message = add_label(message, scr=self.page)
 (self.cancel_button, self.confirm_button) = add_button_pair(..., scr=self)
 ```
 
-`TransactionScreen` appends outputs, then the fee
-([transaction.py:68-79](../../src/gui/screens/transaction.py#L68-L79)), then
-warnings ([transaction.py:81-85](../../src/gui/screens/transaction.py#L81-L85))
-into the same `self.page`, so the fee's vertical position is a function of the
+`TransactionScreen` appends the aggregated warning block
+([transaction.py:68-71](../../src/gui/screens/transaction.py#L68-L71)), then
+outputs, then the fee
+([transaction.py:73-92](../../src/gui/screens/transaction.py#L73-L92)) into the
+same `self.page`, so the fee's vertical position is a function of the
 attacker-chosen output count. No scroll-to-end gate exists anywhere in
 `src/gui/`.
 
@@ -3039,11 +2993,10 @@ output list.
 
    Start the button in `lv.btn.STATE.INA` when the content overflows the
    viewport.
-3. Cap or paginate the output list on the default page, and render
-   `"%d change outputs not shown" % num_change_outputs` — the counter already
-   exists at
-   [transaction.py:60-66](../../src/gui/screens/transaction.py#L60-L66) and is
-   discarded (see F-24).
+3. Cap or paginate the output list on the default page, and count the outputs
+   the change filter skips at
+   [transaction.py:73-79](../../src/gui/screens/transaction.py#L73-L79) so
+   `"%d change outputs not shown"` can be rendered (see F-24).
 
 ---
 
@@ -3199,22 +3152,21 @@ can never fully replace identity. Restrict labels to a short printable-ASCII set
 
 ### F-24: The transaction screen is incomplete by default
 
-**Status:** Confirmed · **Severity:** Medium · **Confidence:** High. Points 1
-and 2 are trivially verifiable, and point 1 is dead Python.
+**Status:** Confirmed · **Severity:** Medium · **Confidence:** High.
 
 - **Affected component:** PSBT display metadata and `TransactionScreen`.
 - **Files and code regions:**
-  [manager.py:747-771](../../src/apps/wallets/manager.py#L747-L771);
-  [transaction.py:16-27](../../src/gui/screens/transaction.py#L16-L27),
-  [transaction.py:60-85](../../src/gui/screens/transaction.py#L60-L85).
+  [manager.py:985-986](../../src/apps/wallets/manager.py#L985-L986);
+  [transaction.py:73-83](../../src/gui/screens/transaction.py#L73-L83),
+  [transaction.py:197](../../src/gui/screens/transaction.py#L197).
 - **Functions and modules:** Wallet-manager output metadata,
   `TransactionScreen`.
 - **Attacker capability:** Supply a transaction whose safety depends on hidden
-  change, hidden warnings, or fee context.
+  change or on fee context.
 - **Prerequisites:** The user follows the default confirmation view.
 - **Default reachability:** Every ordinary Bitcoin transaction confirmation.
-- **Impact on funds:** Point 3 is the missing compensating control for F-03.
-  Points 1 and 2 make the change chain effectively invisible.
+- **Impact on funds:** The fee gap is the missing compensating control for
+  F-03.
 - **Physical access required:** No.
 - **Malicious host required:** Yes.
 - **Malicious SD/QR/USB input required:** Yes.
@@ -3225,115 +3177,66 @@ and 2 are trivially verifiable, and point 1 is dead Python.
   enough recipient, change, warning, and fee information for informed approval.
 - **Owning codebase:** This repository.
 
-This is three defects in the same screen. Together they mean the default
+Two defects remain in the same screen. Together they mean the default
 confirmation view does not carry enough information to judge the transaction.
 
-**1. Change is never labelled "change" anywhere.** The code that would do it is
-dead:
-
-```python
-branch_txt = ""
-if branch_idx == 1:
-    "change "                       # bare expression, discarded
-elif branch_idx > 1:
-    "branch %d " % branch_idx       # bare expression, discarded
-metaout["label"] = "%s %s#%d" % (wallet.name, branch_txt, idx)
-```
-
-`branch_txt` is always empty. A change output and a receive-branch output of the
-same wallet both render as `MyWallet #7`. Nothing on either page separates
-branch 0 from branch 1 from branch 3 of a multi-branch descriptor. The resulting
-label also has a double space, which makes it easy to spot.
-
-**2. A gap-limit warning is silently overwritten:**
-
-```python
-if allowed_idx <= idx:
-    metaout["warning"] = "Derivation index is by %d larger than ..." % ...
-if wallet.is_watchonly:
-    metaout["warning"] = "Watch-only wallet!"        # overwrites
-```
-
-`metaout["warning"]` is a single string, not a list. For a watch-only wallet the
-signal that a host is steering funds far outside the wallet's known range is
-thrown away and replaced by a much less important notice.
-
-**3. There is no fee sanity check of any kind.** `meta["fee"]` is computed and
+**1. There is no fee sanity check of any kind.** `meta["fee"]` is computed and
 rendered, but there is no absolute threshold, no sat/vB rate, no percentage
-threshold, no warning styling, and `meta["warnings"]` is never populated on the
-Bitcoin path. `if fee:` also means a fee of exactly zero renders no fee row
-(that part is H-05), and a **negative** fee — reachable through F-03 — renders
-as an ordinary `Fee: -N satoshi (-M%)` with no warning.
+threshold and no warning styling. `add_warnings`
+([manager.py:989-1007](../../src/apps/wallets/manager.py#L989-L1007)) now
+populates `meta["warnings"]`, but only for mixed and unknown inputs — nothing
+about the fee reaches it. `if fee:` also means a fee of exactly zero renders no
+fee row (that part is H-05), and a **negative** fee — reachable through F-03 —
+renders as an ordinary `Fee: -N satoshi (-M%)` with no warning.
+
+**2. Change outputs are still absent from the default page, uncounted.**
+Verified change is skipped on page 1
+([transaction.py:73-79](../../src/gui/screens/transaction.py#L73-L79)). That
+skip is now safe — `out["change"]` is only true when the device re-derived the
+script itself — but the user is given no indication that outputs were omitted.
+The `num_change_outputs` counter that previously existed (computed and
+discarded) has been removed rather than rendered.
 
 Fields that appear **only** on the hidden details page for an ordinary
-transaction are the number of inputs, every input value and label, and every
+transaction remain the number of inputs, every input value and label, and every
 change output. `enable_inputs` opens that page by default only for custom
-sighashes, unknown Liquid values, or issuance. Transaction version, locktime, and
-input sequence are not rendered on either page.
+sighashes, unknown Liquid values, or issuance.
 
 **Attack trace**
 
-Present far-gap watch-only change, or an extreme fee. The default screen omits or
-overwrites the relevant context.
+Present an extreme or negative fee. The default screen renders it as an ordinary
+line with no warning.
 
 **Why existing checks do not prevent it**
 
-Critical fields are hidden on a details page or never generated, and warnings use
-a single replaceable string.
+`meta["warnings"]` is populated for input-provenance problems only, and no code
+path inspects the fee magnitude.
 
 **Code at this tree**
 
-**1. Dead `branch_txt`** —
-[manager.py:746-752](../../src/apps/wallets/manager.py#L746-L752) holds the bare
-discarded expressions.
+**1. No fee sanity check** —
+[transaction.py:82-83](../../src/gui/screens/transaction.py#L82-L83) is
+`fee = meta.get("fee")` then `if fee:`, so a zero fee renders no row (H-05) and
+a negative fee renders as an ordinary line.
+`grep -n "NEGATIVE FEE\|sat/vB" src/apps/wallets/manager.py` returns nothing.
+The warning region itself is no longer dead for Bitcoin and is now drawn at the
+top of both pages via `add_warning`
+([transaction.py:241-245](../../src/gui/screens/transaction.py#L241-L245)),
+which narrows but does not close the F-19 placement concern.
 
-**2. Overwritten warning** —
-[manager.py:757-760](../../src/apps/wallets/manager.py#L757-L760) overwrites the
-gap-limit warning with the watch-only warning.
-
-**3. No fee sanity check** —
-[transaction.py:68](../../src/gui/screens/transaction.py#L68) is
-`if meta.get("fee"):`, so a zero fee renders no row (H-05) and a negative fee
-renders as an ordinary line. `grep -rn 'meta\["warnings"\]' src/apps/wallets/manager.py`
-returns nothing, so `meta["warnings"]` is never populated on the Bitcoin path,
-and the `if "warnings" in meta` block at
-[transaction.py:81-85](../../src/gui/screens/transaction.py#L81-L85) is dead for
-Bitcoin. `num_change_outputs` at
-[transaction.py:60-66](../../src/gui/screens/transaction.py#L60-L66) is computed
-and discarded.
+**2. Unannounced change omission** —
+[transaction.py:73-79](../../src/gui/screens/transaction.py#L73-L79).
 
 **Recommended fix**
 
-Fix `branch_txt`. Make `warning` a list. Add absolute and percentage fee
-thresholds into `meta["warnings"]`. Show input values, transaction version,
-locktime, and sequence on the default page, or at least an "N change outputs not
-shown" line — the counter for it, `num_change_outputs`, is already computed and
-then discarded.
+Add absolute and percentage fee thresholds into `meta["warnings"]`. Show input
+values on the default page, or at least an "N change outputs not shown" line.
 
 **Action plan**
 
-1. Fix the dead code:
-
-   ```python
-   branch_txt = ""
-   if branch_idx == 1:
-       branch_txt = "change "
-   elif branch_idx > 1:
-       branch_txt = "branch %d " % branch_idx
-   metaout["label"] = "%s %s#%d" % (wallet.name, branch_txt, idx)
-   ```
-2. Make `warning` a list and render all of them:
-
-   ```python
-   warnings = metaout.setdefault("warnings", [])
-   if allowed_idx <= idx:
-       warnings.append("Derivation index is by %d larger than last known used index %d!" % ...)
-   if wallet.is_watchonly:
-       warnings.append("Watch-only wallet!")
-   ```
-
-   Update both render sites in `transaction.py` to iterate.
-3. Populate `meta["warnings"]` with fee thresholds in `preprocess_psbt`:
+1. Populate `meta["warnings"]` with fee thresholds in `preprocess_psbt`,
+   alongside the existing `add_warnings` call at
+   [manager.py:986](../../src/apps/wallets/manager.py#L986):
 
    ```python
    meta["fee"] = fee
@@ -3346,12 +3249,12 @@ then discarded.
    elif fee > 1_000_000:
        meta.setdefault("warnings", []).append("Fee is over 0.01 BTC!")
    ```
-4. Change `if meta.get("fee"):` to `if "fee" in meta:` so a zero fee renders
-   (H-05).
-5. Render `"%d change outputs not shown" % num_change_outputs` on the default
-   page.
-6. This item is also a prerequisite for DOC-02: `meta["warnings"]` must be
-   populated on the Bitcoin path before any documented warning can be true.
+2. Change `fee = meta.get("fee")` / `if fee:` to an explicit
+   `if "fee" in meta:` so a zero fee renders (H-05). Note both render sites,
+   [transaction.py:83](../../src/gui/screens/transaction.py#L83) and
+   [:197](../../src/gui/screens/transaction.py#L197).
+3. Count the outputs skipped by the change filter and render
+   `"%d change outputs not shown"` on the default page.
 
 ---
 
@@ -6125,23 +6028,14 @@ Each independently testable clause is one `SM-xx` claim.
 
 Hardware properties outside the source are marked as such rather than inferred.
 
-Result: **23 Confirmed, 12 Qualified, 7 Contradicted** across 42 claims. The
+Result: **27 Confirmed, 12 Qualified, 3 Contradicted** across 42 claims. The
 document is markedly more accurate and more self-critical than most such
 documents — it names its own PIN off-by-one, its lack of key stretching, and
 its unencrypted device secret.
 
-Four of the seven contradictions are concentrated in one section,
-"Transaction verification", and they share a single cause that is not a
-documentation error: **the document was carried over from `origin/master` and
-describes `origin/master`'s wallet manager, while this branch carries the older
-one** (§1.3). SM-34, SM-35, SM-37, and SM-38 are all that gap. They are
-recorded as DOC-02 and DOC-03, and the cheapest fix for both is a cherry-pick,
-not a rewrite. DOC-01 is a genuine documentation defect and is present on
-`origin/master` as well.
-
 | ID | Documented claim | Result | Implementation comparison |
 | --- | --- | --- | --- |
-| SM-01 | The host only sees public data and signatures; keys never leave the device; all critical information — receive addresses, amounts, change outputs — is shown on the device screen for verification ([L11-14](../../docs/security-info.md#L11-L14)). | Qualified | No private-key or mnemonic egress path exists on the host interface. The second half overstates the display: unwarned change outputs are omitted from the default transaction page and no page labels an output "change" (F-24), the fee and every warning sit below an attacker-chosen number of outputs in a scrolling container (F-19), and displayed input amounts are not authenticated (F-03). |
+| SM-01 | The host only sees public data and signatures; keys never leave the device; all critical information — receive addresses, amounts, change outputs — is shown on the device screen for verification ([L11-14](../../docs/security-info.md#L11-L14)). | Qualified | No private-key or mnemonic egress path exists on the host interface. The second half overstates the display: verified change outputs are omitted from the default transaction page with no count of what was hidden (F-24), the fee still sits below an attacker-chosen number of outputs in a scrolling container (F-19), and displayed input amounts are not authenticated (F-03). Outputs are now labelled `… change #N` on the details page. |
 | SM-02 | A thief with the locked device faces secrets encrypted under a key derived from the PIN and a unique internal secret, with the PIN rate-limited so on-device brute force is impractical ([L15-18](../../docs/security-info.md#L15-L18)). | Confirmed for the on-device case | `FlashKeyStore` derives `pin_secret = tagged_hash("pin", secret + pin)` ([flash.py:139](../../src/keystore/flash.py#L139)) and the persistent counter stops online guessing ([flash.py:114-125](../../src/keystore/flash.py#L114-L125)). The offline case is out of this claim's scope and the document states it correctly elsewhere — see SM-19 and F-06. |
 | SM-03 | Anti-phishing words change if the internal secret is gone, revealing device replacement or unauthorized reflashing ([L19-22](../../docs/security-info.md#L19-L22)). | Qualified | The derivation is sound ([ram.py:165-175](../../src/keystore/ram.py#L165-L175)), and in smartcard mode it also binds the card public key ([memorycard.py:66-86](../../src/keystore/memorycard.py#L66-L86)). Detection requires the PIN screen to be drawn at all. A substituted card that reports `PIN_UNLOCKED` suppresses it entirely, so the words are never shown and the check never happens (F-22). |
 | SM-04 | After the initial installation the bootloader only accepts firmware signed by the release keys ([L23-25](../../docs/security-info.md#L23-L25)). | Qualified | Threshold verification, signer lookup, duplicate rejection, and return-code handling are sound (PATH-13, PATH-23), and signed bytes are the executed bytes (PATH-28). Three conditions the claim omits: an unsigned image still clears write protection and erases firmware before its signatures are checked (F-33); boot-time integrity is an unkeyed CRC32, so a flash-write primitive installs replacement firmware with a recomputed record (F-25); and firmware authorization shares its signing domain with user message signing, so a release-key holder's device can be induced to produce a valid firmware signature (F-17). |
@@ -6173,16 +6067,16 @@ not a rewrite. DOC-01 is a genuine documentation defect and is present on
 | SM-30 | Entropy sources are the MCU TRNG and the touchscreen, the latter contributing position and the moment of touch in 180 MHz ticks ([L253-256](../../docs/security-info.md#L253-L256)). | Confirmed | Decorated `PRESSING` events add `ticks_cpu()` and the low eight bits of each coordinate to the pool ([decorators.py:6-18](../../src/gui/decorators.py#L6-L18)). |
 | SM-31 | All entropy is hashed together in a SHA-512 pool, and the resulting entropy is "always at least as good as the best individual source"; the microphones are not used ([L258-261](../../docs/security-info.md#L258-L261)). | Contradicted as an absolute claim | The microphone statement is correct — no acquisition path exists. The "always at least as good" claim does not hold as stated: the pool begins at the public constant `b"7" * 64` ([rng.py:7](../../src/rng.py#L7)), and requests above 64 bytes return raw TRNG output and bypass the pool in their returned value ([rng.py:103-104](../../src/rng.py#L103-L104)). The document also does not mention that the native driver fails open (F-18), though the Python liveness check above it partially covers that. |
 | SM-32 | Specter holds HD private keys in descriptor wallets, supports miniscript, separates wallets per network across Mainnet/Testnet/Regtest/Signet, and Liquid support "exists in the codebase but is not actively maintained" ([L265-273](../../docs/security-info.md#L265-L273)). | Confirmed | Wallet state is rooted under fingerprint and network ([manager.py:72-90](../../src/apps/wallets/manager.py#L72-L90)) and imports reject cross-network descriptor keys ([manager.py:529-539](../../src/apps/wallets/manager.py#L529-L539)). The Liquid caveat is accurate and welcome. It is a maintenance statement, not a reachability statement: Liquid code is in the production build and owns F-11, F-23, F-31, F-35, F-36, and H-25. |
-| SM-33 | Before signing, the device lists every input with the name of the wallet it belongs to and its amount; unknown-wallet inputs are shown as "Unknown wallet" and trigger an explicit warning ([L279-283](../../docs/security-info.md#L279-L283)). | Qualified | `confirm_transaction_final` builds a title listing each wallet and amount ([manager.py:356-368](../../src/apps/wallets/manager.py#L356-L368)), and `confirm_wallets` warns whenever the map contains `None` ([manager.py:370-382](../../src/apps/wallets/manager.py#L370-L382)). But per-input values are drawn only on the hidden details page ([transaction.py:87-112](../../src/gui/screens/transaction.py#L87-L112)), which is not opened by default for an ordinary transaction, so "lists every input … and its amount" is not true of the screen a user actually sees (F-24). |
-| SM-34 | A transaction spending inputs from more than one wallet group triggers an explicit mixed-inputs warning at the top of the confirmation, visible without scrolling, mitigating the multisig/mixed-input change-address attack class ([L284-291](../../docs/security-info.md#L284-L291)). | **Contradicted** | No such warning exists. See DOC-02. |
-| SM-35 | Change outputs show the name of the wallet they are sent to ([L292](../../docs/security-info.md#L292)). | Contradicted for the default view | `metaout["label"]` does carry the wallet name ([manager.py:744-752](../../src/apps/wallets/manager.py#L744-L752)) and the details page renders it. But unwarned change is skipped entirely on page 1 ([transaction.py:60-66](../../src/gui/screens/transaction.py#L60-L66)), and the expressions that would add `"change "` to the label are bare discarded strings, so no page identifies an output as change at all (F-24). |
+| SM-33 | Before signing, the device lists every input with the name of the wallet it belongs to and its amount; unknown-wallet inputs are shown as "Unknown wallet" and trigger an explicit warning ([L279-283](../../docs/security-info.md#L279-L283)). | Qualified | `confirm_transaction_final` builds a title listing each wallet and amount ([manager.py:356-368](../../src/apps/wallets/manager.py#L356-L368)), and `confirm_wallets` warns whenever the map contains `None` ([manager.py:370-382](../../src/apps/wallets/manager.py#L370-L382)). But per-input values are drawn only on the hidden details page ([transaction.py:107-160](../../src/gui/screens/transaction.py#L107-L160)), which is not opened by default for an ordinary transaction, so "lists every input … and its amount" is not true of the screen a user actually sees (F-24). |
+| SM-34 | A transaction spending inputs from more than one wallet group triggers an explicit mixed-inputs warning at the top of the confirmation, visible without scrolling, mitigating the multisig/mixed-input change-address attack class ([L284-291](../../docs/security-info.md#L284-L291)). | Confirmed | `add_warnings` appends `Mixed inputs from different wallets!` whenever the wallet map holds more than one entry, and `Multiple unknown inputs may be from different wallets!` when every input is unattributed ([manager.py:989-1007](../../src/apps/wallets/manager.py#L989-L1007)). `add_warning` draws the block at `IN_TOP_MID` of both pages before any output ([transaction.py:241-245](../../src/gui/screens/transaction.py#L241-L245)), so it is the first thing on the page. It is still inside the scrolling `lv.page`, which is F-19's concern generally, but nothing precedes it. |
+| SM-35 | Change outputs show the name of the wallet they are sent to ([L292](../../docs/security-info.md#L292)). | Qualified | `fill_output_metadata` now sets `"%s change #%d"` for verified change and `"This wallet (%s) …#%d"` otherwise ([manager.py:604](../../src/apps/wallets/manager.py#L604)), and the details page renders it. Verified change is still skipped entirely on page 1 ([transaction.py:73-79](../../src/gui/screens/transaction.py#L73-L79)) with no count of what was hidden, so the claim holds for the details page but not for the default view (F-24). |
 | SM-36 | To use a multisig or miniscript wallet you must first import its descriptor; "the device only signs for wallets it knows" ([L293-295](../../docs/security-info.md#L293-L295)). | **Contradicted** | [manager.py:786](../../src/apps/wallets/manager.py#L786) calls `self.keystore.sign_input(...)` for every input whether or not a wallet resolved, and the derived-key branch signs with no proof that the derived public key appears in the input script (F-04). Import is the intended path, not an enforced one. |
-| SM-37 | Change is verified automatically only when there is one unambiguous spending wallet, its descriptor has exactly two branches, the output derivation resolves to branch-list position 1, and the device re-derives the exact output script from that branch and index ([L297-303](../../docs/security-info.md#L297-L303)). | **Contradicted**; the code is weaker than the text | The change flag is `(wallet is not None and len(wallets) == 1 and wallet in wallets)` ([manager.py:737-738](../../src/apps/wallets/manager.py#L737-L738)). The one-unambiguous-wallet condition and descriptor-based script re-derivation via `fill_scope` are real (PATH-02). The **two-branch requirement and the branch-position-1 requirement are not in the code**: `branch_idx` is read afterwards only to build a label and a gap-limit warning ([manager.py:753-759](../../src/apps/wallets/manager.py#L753-L759)). See DOC-03. |
-| SM-38 | If a branch-1 wallet change claim does not match, the output stays visible and the device displays `Invalid change metadata! Host claimed this output as wallet change, but it does not match your wallet. Verify the destination.` ([L306-312](../../docs/security-info.md#L306-L312)). | **Contradicted** | `grep -rn "Invalid change metadata" src/` matches no source file. See DOC-03. |
+| SM-37 | Change is verified automatically only when there is one unambiguous spending wallet, its descriptor has exactly two branches, the output derivation resolves to branch-list position 1, and the device re-derives the exact output script from that branch and index ([L297-303](../../docs/security-info.md#L297-L303)). | Confirmed | `get_output_status` sets `is_change` only when `len(wallets) == 1`, the wallet is in the map, `wallet.descriptor.num_branches == 2`, `branch_idx == 1`, and the re-derived `desc.script_pubkey()` equals `out.script_pubkey` ([manager.py:560-568](../../src/apps/wallets/manager.py#L560-L568)). All four documented conditions are present and conjunctive. |
+| SM-38 | If a branch-1 wallet change claim does not match, the output stays visible and the device displays `Invalid change metadata! Host claimed this output as wallet change, but it does not match your wallet. Verify the destination.` ([L306-312](../../docs/security-info.md#L306-L312)). | Confirmed | `INVALID_CHANGE_METADATA_WARNING` is defined at [manager.py:46-49](../../src/apps/wallets/manager.py#L46-L49) with the documented wording and is raised when a sole two-branch spending wallet produces branch-1 claims that no re-derived script matches ([manager.py:537-556](../../src/apps/wallets/manager.py#L537-L556)). The output is not classified as change, so it is not skipped on page 1. |
 | SM-39 | The device cannot check the recipient of an unverified output, so always verify the address, amounts, and fees on the device screen; the screen is the trusted output channel and the host is not ([L314-317](../../docs/security-info.md#L314-L317)). | Confirmed | This is the correct framing and the correct instruction. Its precondition is that the relevant text is on screen when Confirm becomes pressable, which F-19 and F-24 do not guarantee. |
 | SM-40 | QR is the default channel; USB is off by default; SD backups written by the device are encrypted and device-specific, while explicit exports — plain mnemonic `.txt`, BIP-85 keys, xpub files — are unencrypted ([L321-334](../../docs/security-info.md#L321-L334)). | Confirmed | Accurate on all three, including the distinction between device-written backups and user-chosen exports. One detail the bullet omits: the backup filename defaults to the first word of the mnemonic ([flash.py:223](../../src/keystore/flash.py#L223), [sdcard.py:66](../../src/keystore/sdcard.py#L66), [ram.py:402](../../src/keystore/ram.py#L402)), so a word of the recovery phrase appears in cleartext in a directory listing (H-11). |
 | SM-41 | The firmware has not undergone an external security audit, and RAM is not explicitly scrubbed on shutdown ([L343-348](../../docs/security-info.md#L343-L348)). | Confirmed | No zeroization of any secret exists anywhere in `src/`; secrets are immutable Python `str`/`bytes` under a garbage collector (§9.3). The disclosure is accurate. |
-| SM-42 | Transaction warnings are implemented in several places rather than one pipeline, covering unknown wallets, mixed-wallet inputs, non-`SIGHASH_ALL` flags, already-signed transactions, and gap-limit overruns; consolidating them is open work ([L354-361](../../docs/security-info.md#L354-L361)). | Qualified | The self-assessment that the checks are scattered is accurate and is exactly the right diagnosis. Two items in the list are wrong: there is no mixed-wallet warning at all (DOC-02), and the gap-limit warning is written to `metaout["warning"]` and then silently overwritten by the watch-only warning two lines later ([manager.py:757-760](../../src/apps/wallets/manager.py#L757-L760)), so it never reaches the screen for a watch-only wallet (F-24). The proposed consolidation would fix the overwrite. |
+| SM-42 | Transaction warnings are implemented in several places rather than one pipeline, covering unknown wallets, mixed-wallet inputs, non-`SIGHASH_ALL` flags, already-signed transactions, and gap-limit overruns; consolidating them is open work ([L354-361](../../docs/security-info.md#L354-L361)). | Confirmed | The self-assessment that the checks are scattered is accurate and is exactly the right diagnosis; all five listed categories now exist. The mixed-wallet warning is `add_warnings` ([manager.py:989-1007](../../src/apps/wallets/manager.py#L989-L1007)), and the gap-limit and watch-only warnings now both survive because `add_output_warning` appends to a list rather than overwriting a string ([manager.py:399-405](../../src/apps/wallets/manager.py#L399-L405)). The consolidation the document calls open work is still open. |
 
 **What the document does not model.** The reverse comparison — current behavior
 with no corresponding claim:
@@ -6258,180 +6152,6 @@ statement about an attacker who has one and not the other:
 This is a documentation fix. The underlying weakness is F-06 and needs the
 memory-hard KDF proposed there.
 
-#### DOC-02: `security-info.md` documents a mixed-inputs warning that does not exist
-
-**Status:** Confirmed · **Severity:** Medium · **Confidence:** High ·
-**Owning codebase:** This repository's documentation, or its wallet manager,
-depending on which way it is resolved
-
-[security-info.md:284-291](../../docs/security-info.md#L284-L291) claims:
-
-> If a transaction spends inputs from more than one wallet group, the device
-> shows an explicit mixed-inputs warning at the top of the transaction
-> confirmation, so it is visible without scrolling.
-> This also applies when known-wallet and unknown-wallet inputs are mixed …
-> The warning is particularly intended to mitigate the class of multisig/mixed-input
-> change-address [attack](https://blog.trezor.io/details-of-the-multisig-change-address-issue-and-its-mitigation-6370ad73ed2a).
-
-No such warning exists. `grep -rni "mixed" src/ --include=*.py` returns only an
-unrelated comment in [rng.py:52](../../src/rng.py#L52) and a descriptor
-xpub/tpub check at [manager.py:536](../../src/apps/wallets/manager.py#L536).
-`confirm_wallets`
-([manager.py:370-382](../../src/apps/wallets/manager.py#L370-L382)) returns
-early whenever every input resolved:
-
-```python
-async def confirm_wallets(self, wallets, show_screen):
-    # check if any inputs belong to unknown wallets
-    if None not in wallets:
-        return True                     # two known wallets -> no warning at all
-```
-
-The only use of `len(wallets)` is
-[manager.py:738](../../src/apps/wallets/manager.py#L738), which *suppresses* the
-change flag when more than one wallet is present — a classification behaviour,
-not a warning. `confirm_transaction_final` does build a title listing each
-wallet and amount, which is useful disclosure but is not the documented warning.
-
-Three aggravating details:
-
-1. The claim is specific. It names placement ("at the top"), scroll visibility
-   ("without scrolling"), and an attack class it mitigates. A reader can
-   reasonably rely on it when deciding whether to approve a multi-wallet spend.
-2. "At the top … visible without scrolling" is structurally false even for the
-   warnings that *do* exist. `meta["warnings"]` is rendered inside the scrolling
-   `lv.page`, appended after all outputs and the fee
-   ([transaction.py:81-85](../../src/gui/screens/transaction.py#L81-L85)) — that
-   is F-19. And `meta["warnings"]` is never populated on the Bitcoin path at
-   all, which is F-24.
-3. **The warning exists in this repository, on another branch.** Commit
-   `7223458` ("Re-add mixed-inputs warning for multi-wallet transactions", #382)
-   is reachable from `master`, `origin/master`, and `origin/dev`, and
-   `git merge-base --is-ancestor 7223458 HEAD` is false. `origin/master` also
-   carries `docs/screenshots/mixed-inputs-warning-page1.png` and `-page2.png`.
-   The string `Mixed inputs from different wallets!` is present in the untracked
-   artifact `src/apps/wallets/__pycache__/manager.cpython-314.pyc` in this
-   working tree, and in no `.py` file here. See §1.3.
-
-**Action.**
-
-1. **Cherry-pick `7223458`** onto this branch, or rebase the branch onto
-   `origin/master`. This is the correct fix: the feature is written, reviewed,
-   and merged upstream of this branch, and the document already describes it.
-   Verify afterwards that the warning fires for two known wallets, not only when
-   an unknown wallet is present.
-2. Note that the "at the top … visible without scrolling" half of the claim
-   still depends on F-19 — the warning region is inside the scrolling `lv.page`
-   on this branch — and on F-24, since `meta["warnings"]` is never populated on
-   the Bitcoin path here. Confirm which of those `7223458` also addresses, and
-   fix the remainder.
-3. If for some reason the cherry-pick is rejected, correct the document instead:
-   remove the mixed-inputs paragraph and the Trezor-attack mitigation claim. A
-   documented control that does not exist is worse than a documented gap.
-
-#### DOC-03: The documented change-verification rules and warning are not in the shipped source
-
-**Status:** Confirmed · **Severity:** Medium · **Confidence:** High ·
-**Owning codebase:** This repository's documentation, or its wallet manager
-
-[security-info.md:297-312](../../docs/security-info.md#L297-L312) describes
-change verification in precise terms:
-
-> Change is verified for you automatically only when there is one unambiguous
-> spending wallet, its descriptor has exactly two branches, the output
-> derivation resolves to branch-list position 1, and the device re-derives the
-> exact output script from that branch and index.
-> …
-> If a branch-1 wallet claim does not match, the output remains visible and the
-> device displays: `Invalid change metadata! Host claimed this output as wallet
-> change, but it does not match your wallet. Verify the destination.`
-
-Two parts of that are not implemented.
-
-Both parts exist on `origin/master`, in commit `fc0e32d` ("feat: Fix
-change-output classification to require verified descriptor derivation", #387),
-which is not an ancestor of this branch (§1.3). So this is a missing
-cherry-pick, not unwritten work.
-
-**1. The branch conditions are absent.** The change flag is set at
-[manager.py:737-738](../../src/apps/wallets/manager.py#L737-L738):
-
-```python
-metaout.update({
-    "change": (wallet is not None and len(wallets) == 1 and wallet in wallets),
-    ...
-})
-```
-
-That is the one-unambiguous-wallet condition, and `fill_scope` / `Descriptor.owns`
-supply the script re-derivation (PATH-02). There is no test for
-`descriptor.num_branches == 2` and no test for `branch_idx == 1`. `branch_idx`
-is fetched on the next lines and used only for the display label and the
-gap-limit warning. An output owned by the sole spending wallet is classified as
-change regardless of which branch it derives from, including the receive branch.
-
-**2. The warning string does not exist.** `grep -rn "Invalid change metadata" src/`
-matches no source file. It matches exactly one path in the working tree:
-
-```text
-src/apps/wallets/__pycache__/manager.cpython-314.pyc
-```
-
-That file is untracked and ignored. Its string table also contains
-`Mixed inputs from different wallets!` (DOC-02). So a build of `manager.py` that
-implemented both documented behaviours existed on this machine, and the source
-in the tree is not it.
-
-**Impact.** A user who reads this section believes the device flags a
-host-supplied change claim that does not match. It does not: the output is
-classified by the rule above, and an unwarned change output is then dropped from
-the default transaction page entirely (F-24). The gap between documented and
-actual behaviour points the wrong way — the document promises a check that is
-missing, rather than omitting one that exists.
-
-**Action plan**
-
-1. **Cherry-pick `fc0e32d`**, or rebase this branch onto `origin/master`. The
-   same rebase closes DOC-02. Confirmed by:
-
-   ```bash
-   git log --all --oneline -S'Invalid change metadata' -- src/apps/wallets/manager.py
-   # fc0e32d feat: Fix change-output classification to require verified
-   #         descriptor derivation (#387)
-   git merge-base --is-ancestor fc0e32d HEAD    # false
-   ```
-2. If the cherry-pick is not taken, the branch conditions are small to
-   reimplement — but prefer the upstream version, which has been reviewed:
-
-   ```python
-   # manager.py, replacing the change expression
-   is_change = False
-   if wallet is not None and len(wallets) == 1 and wallet in wallets:
-       res = wallet.get_derivation(out.bip32_derivations)
-       if res:
-           idx, branch_idx = res
-           if wallet.descriptor.num_branches == 2 and branch_idx == 1:
-               is_change = True
-           else:
-               metaout["warning"] = (
-                   "Invalid change metadata! Host claimed this output as wallet "
-                   "change, but it does not match your wallet. "
-                   "Verify the destination.")
-   metaout["change"] = is_change
-   ```
-
-   Either way, check F-24 item 2 in the same pass: `metaout["warning"]` is a
-   single string and is overwritten by the watch-only warning a few lines later,
-   so the new warning disappears for watch-only wallets unless that is fixed
-   too.
-3. Add a regression test in
-   [test/tests_native/test_change_classification.py](../../test/tests_native/test_change_classification.py),
-   which already exercises this path, asserting that a receive-branch output and
-   a three-branch descriptor are **not** classified as change and that the
-   warning is present.
-4. Remove `__pycache__` from the working tree and confirm it is ignored, so a
-   stale artifact cannot again be the only place a security behaviour exists.
-
 ## 9. Properties that hold, and limits of static review
 
 ### 9.1 Security properties that hold in reviewed paths
@@ -6469,8 +6189,7 @@ Why it holds: ownership rests on a device-derived script rather than a host
 assertion, and the branch and index ranges are bounded.
 Residual risk: this defends the script, not the scope it is handed — see H-27.
 Full descriptor, Miniscript, TapTree, script, and address-parser safety is not
-established here. The branch and two-branch conditions the documentation
-describes are not implemented (DOC-03).
+established here.
 Confidence: High
 
 #### PATH-03: Application SD and USB adapters do not execute input — Blocked
@@ -7013,10 +6732,10 @@ Confidence: High
 #### PATH-39: Displayed Bitcoin output addresses are derived from the parsed scriptPubKey — Blocked
 
 Evidence: output metadata is built from `psbtout.script_pubkey` and nothing else
-([manager.py:737-741](../../src/apps/wallets/manager.py#L737-L741),
-[manager.py:91-99](../../src/apps/wallets/manager.py#L91-L99)), and that string is
-what reaches the confirmation label
-([transaction.py:179-189](../../src/gui/screens/transaction.py#L179-L189)).
+([manager.py:594](../../src/apps/wallets/manager.py#L594),
+[manager.py:102-110](../../src/apps/wallets/manager.py#L102-L110)), and that
+string is what reaches the confirmation label
+([transaction.py:175-178](../../src/gui/screens/transaction.py#L175-L178)).
 Why it holds: there is no host-supplied address field anywhere in the display
 path. No PSBT record carries an address string, and no branch prefers one over the
 derived value. Encoding is deterministic and gated (PATH-34, PATH-35), so a given
@@ -7200,9 +6919,11 @@ Confidence: High for the current pin.
 14. Fuzz the UR path: parts with a corrupted bytewords CRC, mixed checksums,
     `seq_len` up to 10^6, and non-alphabetic bytewords characters. Assert that the
     assembled message is CRC-checked before dispatch (F-28, H-08).
-15. Assert that `branch_txt` is non-empty for `branch_idx >= 1`, that `metaout`
-    can carry more than one warning, and that a fee above an absolute or
-    percentage threshold produces a visible warning (F-24).
+15. Assert that a fee above an absolute or percentage threshold, and a negative
+    fee, each produce a visible warning, and that the default page states how
+    many change outputs it omitted (F-24). The label and multi-warning halves of
+    this test now exist in
+    [test_change_classification.py](../../test/tests_native/test_change_classification.py).
 16. Label the real L-BTC asset with `addasset` under a misleading name, then
     render a PSET spending it. Assert that the raw asset ID is still visible next
     to the label (F-23).
@@ -7292,8 +7013,8 @@ Still to do:
 6. Establish the upstream relation for the six forked submodules and record it
    in the repository (§1.2, PATH-18). Start with `embit`, which owns the most
    findings and the PATH-41 invariant.
-7. Diff the 33 commits on `origin/master` that this branch lacks, and decide
-   which are security-relevant (§1.3). Three already are.
+7. Diff the `____` commits on `origin/master` that this branch lacks, and decide
+   which are security-relevant.
 
 ## 11. Final funds-theft analysis
 
@@ -7319,7 +7040,7 @@ prerequisite or coverage limit that static inspection did not settle.
 | Malicious repository contributor | Hide exfiltration in trusted application or build code, or in a subtle flag or path change such as assert stripping, writable-path imports, warning removal, or provenance-free vendoring (H-13, F-15, H-22, D-02). | **No architectural prevention.** No deliberate backdoor was found, but F-15 proves a small import-path change can bypass signed-firmware expectations, and absent CI, CODEOWNERS, and release attestation weakens detection. |
 | Malicious physical attacker | Read internal flash for F-06, write `/qspi/config.py` for persistent pre-PIN execution (F-15), induce F-32's USB MSC fault and chain it into both, or use a malicious smartcard (F-34). With direct flash write, install firmware and forge CRC records (F-25); F-33 can first clear WRP with an unsigned SD file. | **Conditional, and not established as prevented.** F-15 needs a QSPI writer, F-32 an inducible boot fault, F-34 timing, and F-06 and F-25 practical hardware access. Once those prerequisites hold, software controls do not restore the intended boundary. |
 | Compromised build environment | Inject key-stealing code into compiler output or generated firmware, then present its opaque firmware hash to release-key holders for threshold authorization. F-08 also means the finished artifact does not record which key set established its trust root. | **Partly, but not reliably detected.** Two release signatures are still required, but F-17's signing UI does not bind approval to reviewed source or recognizable binary content. The Docker build appears deterministic by inspection, but no two clean builds and no official-release comparison were performed, so independent detection is unverified. |
-| Malicious transaction | Request `NONE \| ANYONECANPAY` and later transplant the approved input signature into an arbitrary payment (F-30). Or rely on F-24 and F-19: present many outputs so the fee and every warning sit below the fold while Confirm stays pressable. | **No.** F-30 is a blank-cheque path gated only by a generic warning and user approval, and the confirmation screen does not reliably show the data that would make an unusual transaction recognizable. |
+| Malicious transaction | Request `NONE \| ANYONECANPAY` and later transplant the approved input signature into an arbitrary payment (F-30). Or rely on F-24 and F-19: present many outputs so the fee and every per-output warning sit below the fold while Confirm stays pressable. | **No.** F-30 is a blank-cheque path gated only by a generic warning and user approval, and the confirmation screen does not reliably show the data that would make an unusual transaction recognizable. |
 | Malicious wallet descriptor | Ask the user to import a policy in which an attacker key can satisfy the spending threshold, then steal funds deposited to that policy. After import, the ownership path re-derives the descriptor and overwrites host-supplied scripts, which prevents later script substitution (PATH-02). | **Partly.** The implementation prevents the post-import script-spoofing path and identifies device, external, and NUMS keys during confirmation. It cannot prevent theft when the user approves an attacker-spendable policy. Script and address-encoding safety is established for Bitcoin (PATH-34 to PATH-37) but not for the Liquid confidential encoder (F-35). Full Miniscript and TapTree safety is not established. |
 | Malformed Bitcoin data | F-10 shows declared-length parser desynchronization in `non_witness_utxo` with unresolved target impact. Version-incompatible scope fields are rejected (PATH-41). | **Partly.** The version-consistency class is closed in the parser, though only there and with no test pinning it here (H-27). No reviewed malformed Bitcoin path independently established code execution; F-31 is the separate malformed-Liquid result. |
 
@@ -7328,7 +7049,7 @@ prerequisite or coverage limit that static inspection did not settle.
 | Question | Assessment |
 | --- | --- |
 | Can a malicious host steal private keys through normal firmware interfaces? | No direct private-key or mnemonic export exists. But a host can take the **master xpub** and fingerprint with no confirmation at all (F-05), and can get a **recoverable** signature — and therefore the public key — at any derivation path with one confirmation. Privacy loss is total. No spending-authority path was found. Physical flash readout can enable seed recovery (F-06). |
-| Can a host cause signing of a transaction different from what the user believes was approved? | **Yes, three ways.** F-03 is a value-destroying divergence paid to a miner: displayed input amounts are never authenticated (High). F-21 is a divergence on the message-signing prompt, where a NUL truncates what is drawn but not what is hashed (High). F-24 and F-19 are the structural version: the default screen omits input values and change outputs, transaction version, locktime, and input sequences appear on neither page, and the fee sits below an attacker-chosen number of outputs while Confirm stays fixed on screen. The v2-field parser class is closed (PATH-41), but only in the dependency (H-27). |
+| Can a host cause signing of a transaction different from what the user believes was approved? | **Yes, three ways.** F-03 is a value-destroying divergence paid to a miner: displayed input amounts are never authenticated (High). F-21 is a divergence on the message-signing prompt, where a NUL truncates what is drawn but not what is hashed (High). F-24 and F-19 are the structural version: the default screen omits input values and change outputs without saying so, and the fee sits below an attacker-chosen number of outputs while Confirm stays fixed on screen. Transaction version, locktime and input sequences are now rendered on the details page. The v2-field parser class is closed (PATH-41), but only in the dependency (H-27). |
 | Can malicious QR, PSBT, or descriptor data exploit the wallet? | **Yes for malicious PSBT data.** For QR, F-16 and F-28 let frames from two payloads be spliced and never check any checksum, and H-08 lets malformed characters decode silently. None is an independent theft primitive, because the result is still displayed, but they amplify payload confusion. Malicious PSET data additionally reaches the Liquid address encoder and produces a misleading confirmation screen (F-35) or aborts it (H-25). Script, Base58, and Bech32 handling is clean on the Bitcoin side (PATH-34 to PATH-37). Descriptor scope is only partly resolved: the ownership path re-derives and compares the scriptPubKey and the device overwrites host-supplied witness and redeem scripts, but full descriptor, Miniscript, and TapTree parser safety is not established. |
 | Can SD or USB data execute unauthorized code? | No application-level adapter evaluates payload data, and boot-time SD module shadowing is not compiled in (PATH-30). However, F-32 plausibly exposes both flash partitions read-write over USB MSC after an inducible boot fault, and writing `/qspi/config.py` then reaches F-15's confirmed pre-PIN import on every normal boot. FatFs and native USB/SD memory safety is unreviewed. |
 | Can firmware signature verification be bypassed? | Not by breaking the algorithm: the verifier and the tool/device message construction are sound. But **F-17** can harvest valid authorization through message signing, **F-25** accepts forged CRC records after direct flash write, and **F-33** lets an unsigned SD file clear WRP even though its bytes remain blocked from immediate execution (PATH-23). |
@@ -7337,7 +7058,7 @@ prerequisite or coverage limit that static inspection did not settle.
 | Can RAM remnants after shutdown be exploited? | Unknown, and not answerable from static review. Structurally, no secret is ever zeroized: they are immutable Python `str`/`bytes` under a GC, and there is no wipe of a secret buffer anywhere in `src/`. |
 | Is entropy weak or predictable? | **Conditionally yes.** F-18 confirms that the TRNG driver returns zero-valued words on timeout and never checks the seed-error or clock-error flags. Seed generation becomes reproducible only if the failure persists and the software pool holds no attacker-unknown input. Prior touch timing or coordinates stay mixed into mnemonic-sized requests, so a transient fault does not imply an all-zero or attacker-known seed. Whether the peripheral faults in practice, and how much unpredictable touch state is present, needs hardware testing. |
 | Can an attacker manipulate ECDSA nonces? | **No.** Stock deterministic RFC6979, deterministic counter bytes for low-R grinding, and no host-controlled data anywhere in nonce derivation. Hardening gaps only: the context is never randomized (F-14), and H-09 is a latent memory-safety bug in an unreachable nonce helper. Physical side-channel and fault resistance is incomplete. |
-| Are address or transaction displays different from signed data? | **Yes. F-03, F-11, F-21, and F-35 are confirmed divergences, and F-23 adds host-chosen Liquid asset names. F-19 and F-24 confirm that the fee, input values, and warnings can be absent from the default view, and that transaction version, locktime, and input sequences are absent from both views.** On the address layer the two networks differ. Bitcoin holds: `bech32.py` passes the complete BIP-173/350 vector set, Base58Check enforces its checksum, `Script.script_type()` pins the witness version to {0,1} and the program to {20,32} bytes, the displayed string comes from the parsed scriptPubKey and nothing else, and `format_addr` only inserts spaces and newlines with no truncation (PATH-34 to PATH-40). Liquid does not: **F-35** shows the confidential-address encoder is neither injective nor total, so four distinct scriptPubKeys render as one address and OP_RETURN renders as a well-formed `lq1…` address. **F-36** breaks the decode direction, and **H-25** turns a Liquid p2pkh output into an aborted confirmation screen. |
+| Are address or transaction displays different from signed data? | **Yes. F-03, F-11, F-21, and F-35 are confirmed divergences, and F-23 adds host-chosen Liquid asset names. F-19 and F-24 confirm that the fee, input values, and per-output warnings can be absent from the default view. Transaction version, locktime and input sequences are rendered on the details page.** On the address layer the two networks differ. Bitcoin holds: `bech32.py` passes the complete BIP-173/350 vector set, Base58Check enforces its checksum, `Script.script_type()` pins the witness version to {0,1} and the program to {20,32} bytes, the displayed string comes from the parsed scriptPubKey and nothing else, and `format_addr` only inserts spaces and newlines with no truncation (PATH-34 to PATH-40). Liquid does not: **F-35** shows the confidential-address encoder is neither injective nor total, so four distinct scriptPubKeys render as one address and OP_RETURN renders as a well-formed `lq1…` address. **F-36** breaks the decode direction, and **H-25** turns a Liquid p2pkh output into an aborted confirmation screen. |
 | Can signatures or secret-derived material be obtained outside transaction confirmation? | **Yes, four ways.** Xpub and fingerprint with **no** confirmation (F-05). Up to 1000 raw TRNG bytes with **no** confirmation (F-14). A message signature at any path with one confirmation whose contents the host can partly hide (F-21). The SLIP-77 master blinding key with one confirmation. |
 | Can a message signature be reused as a transaction signature? | No for Bitcoin or Liquid consensus data. The 25-byte domain prefix sits exactly where a sighash preimage keeps hash output, so a collision needs about 2^168 work, and the length prefix covers the exact bytes hashed. **But the same prefix is deliberately shared with firmware authorization (F-17)**, so a message signature can be a valid firmware signature, which is a higher-value target than a transaction. |
 | Can a host obtain a signature at a derivation path the user did not intend? | **Yes.** F-04: derived keys are signed with no script-membership check, under any host-chosen path, over a sighash the host builds. A confirmation is shown, but it shows a transaction the user does not recognize as theirs. |
@@ -7353,13 +7074,7 @@ prerequisite or coverage limit that static inspection did not settle.
 
 ### 12.1 Priority
 
-1. **First, and nearly free: close the branch gap.** Cherry-pick `7223458`,
-   `fc0e32d`, and `3d1bb8e` from `origin/master`, or rebase this branch onto it.
-   That closes DOC-02, DOC-03, and part of F-24 with code that is already
-   written, reviewed, and merged upstream of this branch, and it makes the
-   shipped `docs/security-info.md` true rather than aspirational. Then diff the
-   remaining 30 commits for security content (§1.3). Nothing else in this list
-   has a comparable cost-to-benefit ratio.
+1. **Done.**
 2. **Emergency, process.** Stop signing releases with a key that can also be used
    by the generic message app, and give firmware authorization its own domain
    separator (F-17). The interim mitigation — a dedicated release key on a
@@ -7413,9 +7128,8 @@ prerequisite or coverage limit that static inspection did not settle.
 15. **Documentation, and cheap.** Fix the incorrect security claims in
     `docs/security-info.md`. DOC-01 — the self-contradicting offline-brute-force
     bullet — is a one-paragraph rewrite and is a genuine documentation defect,
-    present on `origin/master` too. DOC-02 and DOC-03 are resolved by item 1
-    rather than by editing; edit them only if the cherry-pick is rejected. All
-    three are shipped user-facing claims, so they rank above the remaining build
+    present on `origin/master` too. It is now the only open doc-vs-code item,
+    and it is a shipped user-facing claim, so it ranks above the remaining build
     hardening.
 16. **Build and dependency hardening.** Restore `-Wall` (H-22). Replace the
     compiler MD5 pin (F-09). Record upstream SHAs for flattened trees (D-02) and
@@ -7608,10 +7322,7 @@ Stated plainly, as gaps rather than as coverage:
 
 In priority order:
 
-1. **Close the branch gap against `origin/master`** (§1.3). Three security
-   changes that exist in this repository are absent from this branch, and the
-   shipped security documentation already describes them. This is the cheapest
-   item in the report and it retires DOC-02, DOC-03, and part of F-24.
+1. **Done.**
 2. **Route F-17 and F-25 to the release-key holders before anything else is
    published.** F-17's mitigation is available today without a code change, and
    publishing the report describes the attack.
@@ -7677,8 +7388,8 @@ hardware, an external component, or release artifacts.
 | Simulator, hardware, and physical attack | Not statically answerable in full | Production and simulator separation and hardware-specific attack prerequisites are recorded | No hardware was accessed. Simulator, HWI, test, and demo content is shallow |
 | Fault handling and recovery | Partial | Ignored verification, RNG timeout, callbacks, channel errors, fallback, boot faults, wipe, mailbox, WRP, and interrupted update were traced | Watchdog and reset breadth, and induced hardware-fault behavior, stay open |
 | Control-flow-oriented audit | Partial | Every application module, the whole bootloader, the whole secp binding, the native smartcard path, and the critical runtime and import callers were traced | General interpreter, HAL, and native-driver callers and external firmware are incomplete |
-| Security-model differential | Complete | Section 8.10 checks all 42 independently testable `docs/security-info.md` claims against the implementation, performs the reverse comparison, and records DOC-01, DOC-02, and DOC-03 | External hardware claims are marked conditional rather than inferred. Four of the contradictions trace to the branch gap in §1.3 rather than to a documentation error |
-| Historical audit | Partial | All 63 MicroPython fork diffs and the security-sensitive regions of project history were reviewed, and the branch's relation to `origin/master` was established (§1.3). Findings include F-15, H-22, D-02, DOC-02, DOC-03 | The full project history was not read commit by commit, the 30 remaining `HEAD..origin/master` commits were not individually assessed, and signer identity could not be cryptographically verified |
+| Security-model differential | Complete | Section 8.10 checks all 42 independently testable `docs/security-info.md` claims against the implementation, performs the reverse comparison, and records DOC-01 | External hardware claims are marked conditional rather than inferred |
+| Historical audit | Partial | All 63 MicroPython fork diffs and the security-sensitive regions of project history were reviewed, and the branch's relation to `origin/master` was established (§1.3). Findings include F-15, H-22, D-02 | The full project history was not read commit by commit, the `____` remaining `HEAD..origin/master` commits were not individually assessed, and signer identity could not be cryptographically verified |
 | Dependency and submodule trust | Partial | Outer pins and origins, LVGL, the full MicroPython fork delta, the secp binding, the generator table, and the release lock were assessed | Flattened native trees lack upstream SHAs (D-02). Upstream equivalence is not established for the six forked submodules, which also carry `branch =` declarations (§1.2, PATH-18). Full advisory and backport review and official artifact reproduction remain |
 | Final funds-theft analysis | Complete | Section 11 maps all 14 attacker capabilities to the strongest identified path and prevention result | Conditional prerequisites are explicit |
 | Malicious-maintainer analysis | Partial | Section 8.1 ranks and demonstrates effective hiding places (F-15, H-22, D-02) and assesses the absent isolation, CI, and review controls | Full flattened-tree content, signer trust, and independent release reproduction stay open |
