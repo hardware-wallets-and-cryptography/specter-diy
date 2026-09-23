@@ -74,47 +74,28 @@ impact stay open.
 
 Recursive submodule pins at this tree:
 
-```text
- c3315700c671825cf5e0a58262e88b821c477a5c bootloader (v1.0.0-22-gc331570)
- 8ea398023265f9fdec98b3a3f7c670681b1484cf bootloader/lib/fatfs (R0.14-2-g8ea3980)
- 5e1c885efb0f400d024efc259eddd6a5ee9cba7b bootloader/lib/secp256k1 (v0.2.0~173)
- de1abb45da035ca3d945868ac114a9de343ecb1e f469-disco (v1.3.1-19-gde1abb4)
- eb6104fd85d3becabba628756cd5e1b75619f3a1 f469-disco/libs/common/embit (v0.8.2)
- d9560e0af78d9059bba0c4845a310387abfa4e5e f469-disco/libs/common/embit/secp256k1/secp256k1-zkp
- 6bdf1b69162b673d48042ccd021f9efa019091fa f469-disco/micropython (v1.10-1185-g6bdf1b691)
- 1e74fc3c617222396d9a49dd53f6c4bb28a9c117 f469-disco/usermods/secp256k1 (origin/secp-zkp)
- d9560e0af78d9059bba0c4845a310387abfa4e5e f469-disco/usermods/secp256k1/secp256k1
- dd100e5e07c8ae18c6e885d97d9c5938049fff44 f469-disco/usermods/udisplay_f469/lvgl (v6.0.2-31-gdd100e5e0)
-```
+| Submodule | Remote | Fork? | Pinned commit | Describe | `branch =` | Security-relevant notes |
+|---|---|:--:|---|---|---|---|
+| `bootloader` | `hardware-wallets-and-cryptography/specter-bootloader` | ✅ | `c331570` | `v1.0.0-22-gc331570` | `dev` (`.gitmodules:9`) | Firmware root of trust. Owns F-08, F-17, F-25, F-33, H-20 |
+| `bootloader/lib/fatfs` | `hardware-wallets-and-cryptography/fatfs` | ✅ | `8ea3980` | `R0.14-2-g8ea3980` | `dev` (`bootloader/.gitmodules:8`) | Bootloader-side filesystem parser. Not reviewed for memory safety |
+| `bootloader/lib/secp256k1` | `bitcoin-core/secp256k1` | ❌ | `5e1c885` | `5e1c885` | — | — |
+| `f469-disco` | `hardware-wallets-and-cryptography/f469-disco` | ✅ | `de1abb4` | `v1.3.1-19-gde1abb4` | `dev` (`.gitmodules:4`) | Board support, user modules, and the vendored Python libraries below |
+| `f469-disco/libs/common/embit` | `hardware-wallets-and-cryptography/embit` | ✅ | `eb6104f` | `v0.8.2` | `dev` (`f469-disco/.gitmodules:18`) | PSBT/PSET and address layer, at `libs/common/embit/src/embit/`. Owns F-04, F-10, F-35, F-36, H-15 item 3, H-26 |
+| `f469-disco/libs/common/embit/secp256k1/secp256k1-zkp` | `ElementsProject/secp256k1-zkp` | ❌ | `d9560e0` | `d9560e0a` | — | Same commit as `usermods/secp256k1/secp256k1` below — no version skew between the two checkouts |
+| `f469-disco/micropython` | `hardware-wallets-and-cryptography/micropython` | ✅ | `6bdf1b6` | `v1.10-1185-g6bdf1b691` | — | Merge-base `10709846f` = `v1.12-35`, so the interpreter base is from 2019. 63 fork-only commits, all inspected. See D-01, D-02 |
+| `f469-disco/usermods/secp256k1` | `hardware-wallets-and-cryptography/secp256k1-embedded` | ✅ | `1e74fc3` | `1e74fc3` | `secp-zkp` (`f469-disco/.gitmodules:13`) | Nested gitlink pins `secp256k1-zkp` at `d9560e0`. Owns F-13, F-31, H-01, H-09, H-16, H-17 |
+| `f469-disco/usermods/secp256k1/secp256k1` | `ElementsProject/secp256k1-zkp` | ❌ | `d9560e0` | `d9560e0a` | — | Same commit as `embit/secp256k1-zkp` above |
+| `f469-disco/usermods/udisplay_f469/lvgl` | `lvgl/lvgl` | ❌ | `dd100e5` | `v6.0.2-31-gdd100e5e0` | `release/v6` (`f469-disco/.gitmodules:8`) | Upstream `lvgl/lvgl` `v6.0.2-31`. No fork divergence. About seven years old |
 
-| Component | Pin | Security-relevant notes |
-| --- | --- | --- |
-| `bootloader` | `c331570`, `v1.0.0-22` | Firmware root of trust. Owns F-08, F-17, F-25, F-33, H-20 |
-| `f469-disco` | `de1abb4`, `v1.3.1-19` | Board support, user modules, and the vendored Python libraries below |
-| `embit` | `eb6104f`, tag `v0.8.2` | PSBT/PSET and address layer, at `libs/common/embit/src/embit/`. Owns F-04, F-10, F-35, F-36, H-15 item 3, H-26 |
-| `micropython` (fork) | `6bdf1b6`, 2022-11-07 | Merge-base `10709846f` = `v1.12-35`, so the interpreter base is from 2019. 63 fork-only commits, all inspected. See D-01, D-02 |
-| `usermods/secp256k1` (binding fork) | `1e74fc3`, 2021-10-06 | Nested gitlink pins `secp256k1-zkp` at `d9560e0`. Owns F-13, F-31, H-01, H-09, H-16, H-17 |
-| `ecmult_static_context.h` | Checked in, not generated at build time | All 1024 entries recomputed from `gen_context.c` and matched exactly. No build-time recomputation check exists |
-| `lvgl` | `dd100e5e`, 2019-10-29 | Upstream `lvgl/lvgl` `v6.0.2-31`. No fork divergence. About seven years old |
-| `bootloader/lib/fatfs` | `8ea3980`, `R0.14-2` | Bootloader-side filesystem parser. Not reviewed for memory safety |
+**6 of 10 point at forks under one GitHub org** (`hardware-wallets-and-cryptography/*`)
+rather than upstream, and **6 carry a mutable `branch =`**. Only `lvgl/lvgl` and
+`bitcoin-core/secp256k1` point upstream; `ElementsProject/secp256k1-zkp` is a
+third-party fork used unmodified from two paths. Full reproducibility analysis
+in [`submodules.md`](../submodules.md).
 
-**Six of eight submodules point at forks, and six carry a mutable `branch =`.**
-There are six `branch =` declarations:
-
-| File | Line | Branch | Submodule |
-|---|---|---|---|
-| `.gitmodules` | 4 | `dev` | `f469-disco` |
-| `.gitmodules` | 9 | `dev` | `bootloader` |
-| `bootloader/.gitmodules` | 8 | `dev` | `lib/fatfs` |
-| `f469-disco/.gitmodules` | 8 | `release/v6` | `lvgl` |
-| `f469-disco/.gitmodules` | 13 | `secp-zkp` | `usermods/secp256k1` |
-| `f469-disco/.gitmodules` | 18 | `dev` | `libs/common/embit` |
-
-Six of the eight submodule URLs point at forks under one GitHub org
-(`hardware-wallets-and-cryptography/*`) rather than at the corresponding
-upstream projects: `f469-disco`, `bootloader` (as `specter-bootloader`),
-`micropython`, `secp256k1-embedded`, `embit`, and `fatfs`. Only `lvgl/lvgl` and
-`bitcoin-core/secp256k1` point upstream.
+Separately, `ecmult_static_context.h` (checked in, not generated at build
+time) has all 1024 entries recomputed from `gen_context.c` and matched
+exactly — but no build-time recomputation check exists to catch future drift.
 
 The gitlink SHA is what actually gets checked out:
 a normal `git clone --recursive` / `git submodule update` fetches exactly
@@ -143,6 +124,24 @@ provenance problem D-02 records for the flattened native trees.
    git submodule status --recursive | grep -q '^[+-]' && \
      { echo "submodule not at recorded commit"; exit 1; }
    ```
+
+   Variant, if `branch =` is kept for maintenance convenience: annotate each
+   line with the SHA it was pinned at, so the intended commit is visible in
+   `.gitmodules` itself rather than only in the index/tree. Git ignores the
+   comment, so this doesn't change resolution and doesn't substitute for the
+   CI guard above — it's documentation, not enforcement:
+
+   ```ini
+   [submodule "f469-disco"]
+       path = f469-disco
+       url = ...
+       branch = dev  # pinned SHA: de1abb45da035ca3d945868ac114a9de343ecb1e
+   ```
+
+   This must be kept in sync by hand on every re-pin; it will drift silently
+   if a maintainer bumps the gitlink without updating the comment. Prefer
+   dropping `branch =` (main option above) unless the convenience is worth
+   that maintenance cost.
 2. Record, for each of the six forked submodules, that the pinned SHA exists in
    the fork **and** its relation to the corresponding upstream commit. Keep the
    result in the repository — a `DEPENDENCIES.md` table or a CI check — so the
@@ -158,13 +157,14 @@ branch is **not** a descendant of `origin/master`. Their merge base is
 
 ```text
 git rev-list --count HEAD..origin/master   ->  33
-git rev-list --count origin/master..HEAD   ->   1
+git rev-list --count origin/master..HEAD   ->  `____`
 ```
 
-The single commit on this side is `66093bb` ("My changes"), a squash that
-carries **some** of `origin/master`'s work forward and leaves the rest behind.
-`git diff --stat HEAD origin/master -- src/ boot/ test/` reports 18 files and
-1,419 insertions.
+`____` commits on this side is/are `____` ("`____`"), that
+carry/carries **some** of `origin/master`'s work forward and leaves the rest behind.
+
+`git diff --stat HEAD origin/master -- src/ boot/ test/` reports `____` files and
+`____` insertions.
 
 Carried forward into this tree:
 
