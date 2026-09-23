@@ -20,10 +20,10 @@ are added or removed, so the sequence may have gaps.
 This is a static, read-only review of the repository and its submodule trees.
 Three dynamic checks were added:
 
-- the `embit` PSBT parser was executed under CPython, including against forged
-  v0 PSBTs carrying v2-only scope keys (PATH-41);
-- the secp256k1 generator precomputation table was recomputed from its
-  generator source;
+- `embit` PSBT parser was executed under CPython, including against forged
+  v0 PSBTs carrying v2-only scope keys (PATH-41),
+- `secp256k1` generator precomputation table was recomputed from its
+  generator source,
 - `bech32.py` was run against the complete published BIP-173/350 vector set
   (PATH-34).
 
@@ -33,38 +33,42 @@ submodule trees against their declared origins. The submodule trees were read
 in place, and `git` was used read-only to establish this branch's relation to
 `origin/master` (§1.3).
 
-- No firmware was built.
-- No hardware was accessed.
-- No device was flashed or unlocked.
-- No release binary was downloaded.
+- No firmware was built
+- No hardware was accessed
+- No device was flashed or unlocked
+- No release binary was downloaded
 
 Claims about hardware behavior, side channels, physical readout, and release
 reproduction are limited as stated.
 
-Read in full:
+#### Read in full
 
-- the application host, GUI, and secret-lifecycle surface
-- the `microur` UR decoder
-- the JavaCard host-side stack
-- the keystore family
+- application host, GUI, and secret-lifecycle surface
+- `microur` UR decoder
+- JavaCard host-side stack
+- keystore family
 - `boot/`
-- the build scripts
-- the bootloader core and tools
-- the secp256k1 binding and its custom preallocated proof module
-- the native smartcard UART and T=1 paths
+- build scripts
+- bootloader core and tools
+- secp256k1 binding and its custom preallocated proof module
+- native smartcard UART and T=1 paths
 - mount, import, and wipe behavior
-- the address and encoding modules of `embit`
+- address and encoding modules of `embit`
 - all 63 MicroPython fork-only commits
 
 FatFs and the native SD/USB HAL were not reviewed for memory safety.
 
-**Verification method.** Every claim was produced by reading the source at this
+#### Verification method
+
+Every claim was produced by reading the source at this
 tree at the cited line ranges. Every quoted snippet is the text at those lines.
 Line citations are links, so they are checkable directly.
 
-Not verified here, and recorded as such where it matters: anything that needs
-hardware or dynamic testing (Section 13.1). F-32's fault inducibility, F-34's
-trigger timing, and F-31's post-overwrite impact stay open.
+#### Not verified here
+
+Anything that needs hardware or dynamic testing (Section 13.1).
+F-32's fault inducibility, F-34's trigger timing, and F-31's post-overwrite
+impact stay open.
 
 ### 1.2 Git and submodule state
 
@@ -97,14 +101,14 @@ Recursive submodule pins at this tree:
 **Six of eight submodules point at forks, and six carry a mutable `branch =`.**
 There are six `branch =` declarations:
 
-```text
-./.gitmodules:4              branch = dev          (f469-disco)
-./.gitmodules:9              branch = dev          (bootloader)
-./bootloader/.gitmodules:8   branch = dev          (lib/fatfs)
-./f469-disco/.gitmodules:8   branch = release/v6   (lvgl)
-./f469-disco/.gitmodules:13  branch = secp-zkp     (usermods/secp256k1)
-./f469-disco/.gitmodules:18  branch = dev          (libs/common/embit)
-```
+| File | Line | Branch | Submodule |
+|---|---|---|---|
+| `.gitmodules` | 4 | `dev` | `f469-disco` |
+| `.gitmodules` | 9 | `dev` | `bootloader` |
+| `bootloader/.gitmodules` | 8 | `dev` | `lib/fatfs` |
+| `f469-disco/.gitmodules` | 8 | `release/v6` | `lvgl` |
+| `f469-disco/.gitmodules` | 13 | `secp-zkp` | `usermods/secp256k1` |
+| `f469-disco/.gitmodules` | 18 | `dev` | `libs/common/embit` |
 
 Six of the eight submodule URLs point at forks under one GitHub org
 (`hardware-wallets-and-cryptography/*`) rather than at the corresponding
@@ -114,7 +118,9 @@ upstream projects: `f469-disco`, `bootloader` (as `specter-bootloader`),
 
 The gitlink SHA is what actually gets checked out:
 a normal `git clone --recursive` / `git submodule update` fetches exactly
-that pinned commit, ignoring `branch =`. That field only takes effect under
+that pinned commit, ignoring `branch =`.
+
+That field only takes effect under
 `git submodule update --remote`. So today, nothing is silently weakened — the
 pin holds. The risk is latent: the first `--remote` update (manual, or via a
 CI job that uses one) will silently move the dependency to the tip of a
