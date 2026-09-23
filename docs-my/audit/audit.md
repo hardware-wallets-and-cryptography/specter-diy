@@ -166,29 +166,7 @@ carry/carries **some** of `origin/master`'s work forward and leaves the rest beh
 `git diff --stat HEAD origin/master -- src/ boot/ test/` reports `____` files and
 `____` insertions.
 
-The native unit test suite imports and runs:
-
-```text
-python3 test/run_native_tests.py
-->  Ran 76 tests
-->  FAILED (errors=2)
-```
-
-74 pass, 2 error, 0 fail. Environment: Python 3.14.7 on darwin.
-
-Both remaining errors are a test-harness incompatibility rather than a source
-defect: [test_transaction_confirmation.py:81](../../test/tests_native/test_transaction_confirmation.py#L81)
-and [:109](../../test/tests_native/test_transaction_confirmation.py#L109)
-reference `ast.Str`, removed in Python 3.12, and the host runs 3.14.7. The
-`ast.Constant` alternative already listed beside it covers those nodes.
-
-Two test modules are present but unreachable.
-`test/tests_native/test_message_signing_display.py` and
-`test/tests_native/test_signing_authorization.py` exist on this branch and not
-on `origin/master`, but neither is re-exported from
-`test/tests_native/__init__.py`, and `test/run_native_tests.py` dispatches via
-`unittest.main('tests_native')`. 287 lines of message-signing and
-signing-authorization tests therefore never execute.
+Unit tests are failing. See this [detailed info](./unit-tests-fail.md).
 
 **Action plan.**
 
