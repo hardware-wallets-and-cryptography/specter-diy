@@ -272,11 +272,14 @@ break a boundary the device's whole security argument rests on:
    not check ASCII. F-17 makes the same prompt a firmware-authorization prompt.
 
 The display is this device's only authorization boundary, and three separate
-findings break it in different places: F-03 on input amounts and the fee, F-11
-on Liquid input values and assets, and F-35 on Liquid addresses. F-19 and F-24
-then determine whether the user sees the remaining honest data at all — the fee
-and every warning sit below an attacker-chosen number of outputs in a scrolling
-container while the Confirm button stays fixed on screen.
+findings break it in different places:
+- F-03 on input amounts and the fee,
+- F-11 on Liquid input values and assets,
+- F-35 on Liquid addresses.
+
+F-19 and F-24 then determine whether the user sees the remaining honest data
+at all — the fee and every warning sit below an attacker-chosen number of outputs
+in a scrolling container while the Confirm button stays fixed on screen.
 
 Boot-time and native paths add further weight. F-31 is a
 pre-confirmation out-of-bounds native write in the Liquid rangeproof path. F-32
@@ -893,6 +896,12 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
    `raise WalletError("Missing non_witness_utxo for input %d" % i)`.
 4. Add the F-24 fee sanity check as the compensating control.
 
+**Regression test**
+
+[test_unverified_witness_utxo_input_is_flagged:44-71](../../test/tests_native/test_signing_authorization.py#L44-L71),
+red today: a `witness_utxo`-only input's amount reaches `meta` with no
+unverified signal.
+
 ---
 
 ### F-04: Derived keys are signed without the root-key script-membership check
@@ -1052,6 +1061,12 @@ not x-only keys, outside Taproot.
    relying on the generic "Unknown wallet in inputs!" prompt.
 4. This is an upstream `embit` defect reproduced verbatim. Route items 1 and 2
    through coordinated disclosure to the `embit` maintainers; item 3 is ours.
+
+**Regression test**
+
+[test_signing_refuses_key_absent_from_input_script:100-153](../../test/tests_native/test_signing_authorization.py#L100-L153),
+red today: the keystore signs with an attacker-chosen derivation path even
+though the resulting key is absent from the input's script.
 
 ---
 
@@ -1482,6 +1497,17 @@ address-type mapping, or omit the address.
    unrecognized purposes rather than showing a misleading p2pkh address.
 5. Gate Confirm on scroll-to-end — see F-19.
 
+**Regression test**
+
+[test_message_with_embedded_nul_must_not_display_as_readable_text:105-130](../../test/tests_native/test_message_signing_display.py#L105-L130),
+red today: a NUL-containing message is decoded and shown as readable text
+instead of falling back to a hex dump, so the hidden tail after the NUL
+reaches the prompt. Partial coverage only — this suite runs under CPython,
+not the pinned MicroPython fork, so it cannot reproduce `objstr.c`'s
+`.decode()` ignoring its encoding argument or `lv_label.c`'s on-device
+`strlen()` truncation; see the test's docstring for what is and isn't
+covered.
+
 ---
 
 ### F-22: The device trusts the smartcard's own report of its PIN state
@@ -1756,6 +1782,38 @@ length in `fill_pset_scope`.
    ```
 3. Fix the ABI mismatch in the same module **first** — see H-16 — or the arena
    bound the native check relies on is itself garbage.
+
+**Regression test**
+
+Not covered by `test/tests_native` — that harness stubs hardware modules and
+runs pure Python under CPython, but the defect is in native C
+(`usecp256k1_rangeproof_rewind_from` in `libsecp256k1.c`), so no amount of
+Python-level mocking reaches the vulnerable loop. Reproducing this needs a
+new, separate native C harness, along the lines of `bootloader/test/*.cpp`
+but targeting the `secp256k1-embedded` usermod instead of the bootloader:
+
+1. Build the MicroPython **unix port** with the `secp256k1` usermod compiled
+   in (the repo already builds this combination for `f469-disco/tests`), so
+   `usecp256k1_rangeproof_rewind_from` runs as real native code rather than
+   through a Python stub.
+2. Compile/run that unix port under ASan+UBSan so an out-of-bounds write is
+   caught deterministically instead of silently corrupting adjacent heap
+   memory.
+3. Replace `platform.get_preallocated_ram()`'s fixed SDRAM arena with a
+   heap buffer of the same declared size for the test process, and drive
+   `usecp256k1_rangeproof_rewind_from` directly from a MicroPython script
+   (or a small C `main()`) with a mock stream, parameterized over
+   `prooflen` in `{0, 5, 63, 64, 65}` — the boundary values the finding
+   calls out.
+4. Assert: for `prooflen < 65`, the call raises `ValueError` (after the
+   fix) or ASan reports the OOB write (before the fix) — either result
+   fails loudly rather than passing silently, which is what makes this a
+   red test once wired up. For `prooflen >= 65`, assert the normal read
+   path completes and no sanitizer report fires.
+5. Wire this into CI as its own job (separate binary/build step from the
+   `tests_native` CPython suite), since it needs a full native build
+   rather than the interpreter already used for the other regression
+   tests in this report.
 
 ---
 
