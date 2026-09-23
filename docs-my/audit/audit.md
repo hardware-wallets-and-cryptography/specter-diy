@@ -166,12 +166,15 @@ carry/carries **some** of `origin/master`'s work forward and leaves the rest beh
 `git diff --stat HEAD origin/master -- src/ boot/ test/` reports `____` files and
 `____` insertions.
 
-The native suite imports and runs:
+The native unit test suite imports and runs:
 
 ```text
-Ran 76 tests in 10.502s
-FAILED (errors=2)
+python3 test/run_native_tests.py
+->  Ran 76 tests
+->  FAILED (errors=2)
 ```
+
+74 pass, 2 error, 0 fail. Environment: Python 3.14.7 on darwin.
 
 Both remaining errors are a test-harness incompatibility rather than a source
 defect: [test_transaction_confirmation.py:81](../../test/tests_native/test_transaction_confirmation.py#L81)
