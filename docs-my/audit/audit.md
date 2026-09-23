@@ -181,20 +181,43 @@ Left behind, all security-relevant, all present on `origin/master`:
 | `7223458` "Re-add mixed-inputs warning for multi-wallet transactions" (#382) | No mixed-inputs warning exists. DOC-02 |
 | `fc0e32d` "Fix change-output classification to require verified descriptor derivation" (#387) | Change classification does not check the derivation branch, and the `Invalid change metadata!` warning does not exist. DOC-03 |
 | `3d1bb8e` "Show Transaction Version, Locktime and inputs' sequences when signing transactions" (#321) | Version, locktime, and input sequences are rendered on neither confirmation page. F-24 |
+| `a5c9926` "Expand detection of possible multisig descriptors & Add data input parsing CI tests" (#301) | Only the `src/apps/wallets/manager.py` hunk is missing; the commit's tests are present. `parse_stream` still gates on `b"&" in data`, so a raw `wsh(`/`sh(`/`tr(` descriptor without a name is not recognised as `ADD_WALLET`. Verified by reverting the hunk alone: `test_raw_descriptor_is_parsed` fails |
 
-Both missing commits are reachable from `master`, `origin/master`, and
+All four missing commits are reachable from `master`, `origin/master`, and
 `origin/dev`:
 
 ```text
 git merge-base --is-ancestor fc0e32d HEAD   ->  false
 git merge-base --is-ancestor 7223458 HEAD   ->  false
+git merge-base --is-ancestor 3d1bb8e HEAD   ->  false
+git merge-base --is-ancestor a5c9926 HEAD   ->  false
 git branch -a --contains 7223458            ->  master, origin/master, origin/dev, ...
 ```
+
+The split is source-only: `git diff HEAD origin/master -- test/tests_native/`
+is empty. This branch already carries **every** test from these commits —
+`test_wallet_manager_warnings.py`, `test_change_classification.py`,
+`test_change_security.py`, `test_transaction_confirmation.py` and
+`test_wallet_manager_parsing.py` — while the `src/` changes they cover were
+left behind. The native suite therefore does not merely fail, it does not
+import at all:
+
+```text
+File "test/tests_native/test_change_security.py", line 19
+    from apps.wallets.manager import UNVERIFIED_CHANGE_WARNING
+ImportError: cannot import name 'UNVERIFIED_CHANGE_WARNING' from 'apps.wallets.manager'
+```
+
+Because `test/tests_native/__init__.py` re-exports every module, this single
+unresolved import masks the whole suite, including the `a5c9926` regression
+above.
 
 **This is the single highest-leverage item in the report.** Three findings —
 DOC-02, DOC-03, and part of F-24 — are not missing work; they are work that
 exists in this repository and is absent from this branch. Rebasing or
-cherry-picking closes them at no design cost.
+cherry-picking closes them at no design cost. The `a5c9926` hunk carries no
+finding ID of its own: it is a latent failure of a test already committed
+here, surfacing as soon as the suite imports again.
 
 It also explains a discrepancy that would otherwise look like a documentation
 error. [docs/security-info.md](../../docs/security-info.md) was taken from
@@ -213,9 +236,9 @@ metadata! …`, neither of which appears in any `.py` file here.
 **Action plan.**
 
 1. Decide the intended relationship between this branch and `origin/master`. If
-   this branch is meant to ship, rebase it onto `origin/master` or cherry-pick
-   `7223458`, `fc0e32d`, and `3d1bb8e` at minimum.
-2. Before assuming the list above is complete, diff the remaining 30 commits for
+   this branch is meant to ship, rebase it onto `origin/master` or pick up
+   `7223458`, `fc0e32d`, `3d1bb8e`, and `a5c9926` at minimum.
+2. Before assuming the list above is complete, diff the remaining 29 commits for
    security content:
 
    ```bash
