@@ -1,15 +1,17 @@
 # Specter-DIY security audit report
 
-**Repository:** `hardware-wallets-and-cryptography/specter-diy`
-
-**Audited tree:** branch `master-from-tag-1.9.0--my-changes--integration`,
-HEAD `66093bb5be5b0e75416259c1d176c7f50156c785`
-
-**Report date:** 2026-09-22
+| Field | Value |
+| --- | --- |
+| Repository | `hardware-wallets-and-cryptography/specter-diy` |
+| Audited branch | `master-from-tag-1.9.0--my-changes--integration` |
+| Audited HEAD | `66093bb5be5b0e75416259c1d176c7f50156c785` |
+| Report date | 2026-09-22 |
 
 Every finding here describes the state of this tree, cites code at this tree,
-and carries a recommended fix with a concrete action plan. Section 3 is the
-summary. Finding identifiers are stable handles and are not contiguous.
+and carries a recommended fix with a concrete action plan.
+
+Finding IDs stay fixed once assigned and are not renumbered as findings
+are added or removed, so the sequence may have gaps.
 
 ## 1. Scope and method
 
@@ -31,20 +33,30 @@ submodule trees against their declared origins. The submodule trees were read
 in place, and `git` was used read-only to establish this branch's relation to
 `origin/master` (§1.3).
 
-No firmware was built. No hardware was accessed. No device was flashed or
-unlocked. No release binary was downloaded. Claims about hardware behavior,
-side channels, physical readout, and release reproduction are limited as
-stated.
+- No firmware was built.
+- No hardware was accessed.
+- No device was flashed or unlocked.
+- No release binary was downloaded.
 
-Read in full: the application host, GUI, and secret-lifecycle surface; the
-`microur` UR decoder; the JavaCard host-side stack; the keystore family;
-`boot/`; the build scripts; the bootloader core and tools; the secp256k1
-binding and its custom preallocated proof module; the native smartcard UART and
-T=1 paths; mount, import, and wipe behavior; the address and encoding modules of
-`embit`; and all 63 MicroPython fork-only commits.
+Claims about hardware behavior, side channels, physical readout, and release
+reproduction are limited as stated.
+
+Read in full:
+
+- the application host, GUI, and secret-lifecycle surface
+- the `microur` UR decoder
+- the JavaCard host-side stack
+- the keystore family
+- `boot/`
+- the build scripts
+- the bootloader core and tools
+- the secp256k1 binding and its custom preallocated proof module
+- the native smartcard UART and T=1 paths
+- mount, import, and wipe behavior
+- the address and encoding modules of `embit`
+- all 63 MicroPython fork-only commits
 
 FatFs and the native SD/USB HAL were not reviewed for memory safety.
-Section 5 records the depth reached for every component.
 
 **Verification method.** Every claim was produced by reading the source at this
 tree at the cited line ranges. Every quoted snippet is the text at those lines.
@@ -100,12 +112,13 @@ upstream projects: `f469-disco`, `bootloader` (as `specter-bootloader`),
 `micropython`, `secp256k1-embedded`, `embit`, and `fatfs`. Only `lvgl/lvgl` and
 `bitcoin-core/secp256k1` point upstream.
 
-Accurate severity. The gitlink SHAs are immutable, and a normal
-`git clone --recursive` / `git submodule update` fetches exactly the recorded
-commits. `branch =` takes effect only under `git submodule update --remote`. So
-this is not an exploitable weakening of the pin today. What it is, is a footgun:
-any `--remote` update, or CI that uses one, silently advances the dependency to
-a mutable branch tip under an account that is not the upstream project.
+The gitlink SHA is what actually gets checked out:
+a normal `git clone --recursive` / `git submodule update` fetches exactly
+that pinned commit, ignoring `branch =`. That field only takes effect under
+`git submodule update --remote`. So today, nothing is silently weakened — the
+pin holds. The risk is latent: the first `--remote` update (manual, or via a
+CI job that uses one) will silently move the dependency to the tip of a
+mutable branch, controlled by an account that is not the upstream project.
 
 The second consequence is that upstream equivalence is not established for the
 six forked trees. The pinned SHA's relation to upstream — identical, ahead by N,
@@ -505,6 +518,7 @@ deliberately not relabelled as vulnerabilities.
 Section 7 holds the additional `H-*` observations. Dependency items D-01 to
 D-03 are in Section 8.9, and the three doc-vs-code items DOC-01 to DOC-03 are
 in Section 8.10.
+
 ## 4. Components and trust boundaries
 
 ### 4.1 Component inventory
@@ -680,6 +694,7 @@ collection or power loss erased physical memory.
 | Liquid blinders and proof nonces | Deterministic `txseed` derivation and host/PSET values | Written to scopes and consumed by proof and commitment code | Temporary filled PSET in the SDRAM ramdisk | Returned in the signed PSET, as the protocol requires | Python objects and temp files. Best-effort cleanup on the next command |
 | PSBT/PSET and transaction buffers | Host stream copied into fixed temporary files | Parsed into scopes, metadata, sighashes, filled and signed files, QR fragments | SDRAM ramdisk during processing. Optional selected SD source or output | Signed container returned over QR, USB, or SD | Best-effort tempdir and transport cleanup. Immutable parser objects and stale SDRAM remnants are not wiped |
 | Backup material | Mnemonic or encrypted keystore serialization | AEAD encryption, filename construction, QR or SD formatting | User-selected SD files, including optional plaintext mnemonic export | Displayed or written only in user-invoked backup flows | Python buffers and FAT metadata. Deletion does not scrub directory entries or RAM copies |
+
 ## 5. Coverage
 
 Each row uses one review depth: Shallow, Moderate, or Deep. A component is split
@@ -7043,6 +7058,7 @@ Confidence: High for the current pin.
   were not.
 - The absence of a finding in a shallowly reviewed component is not evidence that
   the component is safe.
+
 ## 10. Testing gaps and recommended tests
 
 ### 10.1 Questions static inspection did not close
