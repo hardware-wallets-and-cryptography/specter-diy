@@ -1292,7 +1292,7 @@ either side. The message app accepts any derivation path with no allowlist.
 
 ### F-21: Message signing displays less than it signs
 
-**Status:** Confirmed · **Severity:** High · **Confidence:** High for the
+**Status:** Resolved (action-plan item 1) · **Severity:** High · **Confidence:** High for the
 decode and hashing behavior, which is all directly in source. Medium for the
 LVGL truncation step, which is standard `strlen` behavior but should be
 confirmed on device.
@@ -1464,7 +1464,34 @@ reaches the prompt. Partial coverage only — this suite runs under CPython,
 not the pinned MicroPython fork, so it cannot reproduce `objstr.c`'s
 `.decode()` ignoring its encoding argument or `lv_label.c`'s on-device
 `strlen()` truncation; see the test's docstring for what is and isn't
-covered.
+covered. Now green.
+
+**Resolution**
+
+Fixed in [signmessage.py:60-73](../../src/apps/signmessage/signmessage.py#L60-L73):
+explicit byte validation replaces the `.decode("ascii")`/bare-`except` guard —
+a 512-byte length cap, then a printable-range check (`0x20-0x7E` or `\n`)
+gating the pretty-printed branch, anything else falls to the hex dump. Closes
+the NUL-truncation defect the regression test targets, and — because any
+multi-byte UTF-8 sequence contains a byte `>= 0x80`, outside the printable
+range — also closes the U+202E/homoglyph variant described in the same
+finding, without a MicroPython-specific test for it.
+
+**Correction to the action plan:** its own text claims item 1 "closes... the
+forged `__________` separator in one change." That is not the case — `_` is
+`0x5F`, inside the printable range, so a message built entirely of printable
+characters can still embed fake `__________` lines and pass through
+untouched. This sub-issue is still open.
+
+**Still open, not covered by this fix or its test:**
+
+- The forged-separator issue above (item 2's real fix: move the frame lines
+  into their own labels, outside the message content).
+- Bounding the derivation path / warning outside known-wallet paths (item 3).
+- The `m/86h` → p2pkh address-mapping bug (item 4).
+- Gating Confirm on scroll-to-end (item 5, tracked under F-19).
+- No happy-path test confirming an ordinary printable message still displays
+  and signs unchanged.
 
 ---
 

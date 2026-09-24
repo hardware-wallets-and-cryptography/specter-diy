@@ -892,7 +892,8 @@ class WalletManager(BaseApp):
             inp = psbtv.input(i)
             metainp = meta["inputs"][i]
             # verify, do not require non_witness_utxo if witness_utxo is set
-            inp.verify(ignore_missing=True)
+            if not inp.verify(ignore_missing=True):
+                metainp["warning"] = "Input amount is NOT verified - previous transaction missing!"
 
             # check sighash in the input
             if inp.sighash_type is not None and inp.sighash_type != self.DEFAULT_SIGHASH:
