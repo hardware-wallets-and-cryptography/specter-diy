@@ -168,13 +168,55 @@ carry/carries **some** of `origin/master`'s work forward and leaves the rest beh
 
 Unit tests are failing. See this [detailed info](./unit-tests-fail.md).
 
+That covers `test/run_native_tests.py` only. The separate micropython-unix
+suite (`make test` → `test/run_tests.py`) also fails, on
+`WalletsTest.test_mixed_multipath_sortedmulti`
+([test/tests/test_wallets.py:13-31](../../test/tests/test_wallets.py#L13)):
+
+```text
+DescriptorError: All branches should have the same length
+```
+
+The test mixes one multipath key (`/<0;1>/*`) with one fixed-path key
+(`/0/*`) in a `sortedmulti`. BIP-389 allows that mix — a fixed key is meant
+to apply the same path to every derived branch — but the vendored embit's
+branch-uniformity check
+([`descriptor.py:36-38`](../../f469-disco/libs/common/embit/src/embit/descriptor/descriptor.py#L36))
+rejects any descriptor whose keys don't all report the same `num_branches`,
+with no exception for `num_branches == 1`. Embit's own test suite never
+exercises this mixed case either, so this isn't a regression, it's an
+always-broken combination.
+
+The micropython test harness
+([`f469-disco/tests/unittest.py:205-209`](../../f469-disco/tests/unittest.py#L205))
+re-raises on the first failure instead of collecting it, so the run aborts
+here: `test_sign`, `test_revault`, `test_compatibility`, and `test_helpers`
+(registered after `test_wallets` in
+[test/tests/__init__.py](../../test/tests/__init__.py)) never execute, and
+their state is unknown.
+
+The failing tests were added by `10bede2` ("Tests from upstream master").
+That label does not check out — this mixed-multipath case is absent from
+both specter-diy's and embit's actual upstream test suites, and embit never
+implemented it.
+
 **Action plan.**
 
 1. Wire `test_message_signing_display` and `test_signing_authorization` into
    `test/tests_native/__init__.py` so they run, and triage whatever they report.
 2. Replace `ast.Str` with `ast.Constant` in `test_transaction_confirmation.py`
    so the suite reports green and real regressions are visible again.
-3. Before assuming this branch is caught up, diff the remaining 33 commits for
+3. Decide on the mixed-multipath descriptor case: either loosen embit's
+   `Descriptor.__init__` branch check to exclude `num_branches == 1` from the
+   uniformity requirement, or drop the four tests that assume it
+   (`test_mixed_multipath_sortedmulti`,
+   `test_stored_mixed_multipath_descriptor_loads`,
+   `test_mixed_multipath_recovery_miniscript`,
+   `test_mixed_multipath_liquid_descriptor`). Either way, re-run `make test`
+   afterward — `test_sign`, `test_revault`, `test_compatibility`, and
+   `test_helpers` have not executed on this branch and may hide further
+   failures.
+4. Before assuming this branch is caught up, diff the remaining 33 commits for
    security content:
 
    ```bash
