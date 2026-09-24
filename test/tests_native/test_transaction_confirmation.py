@@ -78,8 +78,8 @@ class TransactionConfirmationVisibilityTest(TestCase):
             isinstance(node, ast.Subscript)
             and isinstance(node.value, ast.Name)
             and node.value.id == name
-            and isinstance(node.slice, (ast.Constant, ast.Str))
-            and getattr(node.slice, "value", getattr(node.slice, "s", None)) == key
+            and isinstance(node.slice, ast.Constant)
+            and node.slice.value == key
         )
 
     def _is_change_guard(self, test):
@@ -106,8 +106,8 @@ class TransactionConfirmationVisibilityTest(TestCase):
 
     def _is_str_arg(self, node, value):
         return (
-            isinstance(node, (ast.Constant, ast.Str))
-            and getattr(node, "value", getattr(node, "s", None)) == value
+            isinstance(node, ast.Constant)
+            and node.value == value
         )
 
     def test_primary_confirmation_loop_only_skips_verified_change_without_warning(self):
