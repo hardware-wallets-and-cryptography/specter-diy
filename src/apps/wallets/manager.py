@@ -1031,8 +1031,6 @@ class WalletManager(BaseApp):
                 sig_count += self.keystore.sign_input(psbtv, i, sig_stream, inp_sighash, inp)
                 # add separator
                 sig_stream.write(b"\x00")
-        if sig_count == 0:
-            raise WalletError("We didn't add any signatures!\n\nMaybe you forgot to import the wallet?\n\nScan the wallet descriptor to import it.")
         # remove unnecessary stuff:
         with open(self.tempdir+"/sigs", "rb") as sig_stream:
             psbtv.write_to(out_stream, compress=CompressMode.PARTIAL, extra_input_streams=[sig_stream])
