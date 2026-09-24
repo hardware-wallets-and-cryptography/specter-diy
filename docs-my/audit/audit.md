@@ -7376,3 +7376,5 @@ hardware, an external component, or release artifacts.
 
 A shallow or unavailable component is never treated here as evidence that the
 component is secure.
+
+The End.
