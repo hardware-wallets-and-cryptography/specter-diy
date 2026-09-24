@@ -1408,17 +1408,17 @@ address-type mapping, or omit the address.
 
 1. Validate bytes explicitly instead of relying on `.decode("ascii")`:
 
-   ```python
-   MAX_MSG_LEN = 512
-   if len(message) > MAX_MSG_LEN:
-       raise AppError("Message too long (%d > %d bytes)" % (len(message), MAX_MSG_LEN))
-   printable = all(0x20 <= b <= 0x7E or b == 0x0A for b in message)
-   if printable:
-       msg = "Message:\n\n__________________________________\n" \
-             + message.decode() + "\n__________________________________"
-   else:
-       msg = "Hex message:\n\n%s" % hexlify(message).decode()
-   ```
+  ```python
+    MAX_MSG_LEN = 512
+    if len(message) > MAX_MSG_LEN:
+        raise AppError("Message too long (%d > %d bytes)" % (len(message), MAX_MSG_LEN))
+    printable = all(0x20 <= b <= 0x7E or b == 0x0A for b in message)
+    if printable:
+        msg = "Message:\n\n__________________________________\n" \
+              + message.decode() + "\n__________________________________"
+    else:
+        msg = "Hex message:\n\n%s" % hexlify(message).decode()
+  ```
 
    This closes the NUL truncation, the U+202E and homoglyph variants, and the
    forged `__________` separator in one change.
