@@ -711,7 +711,7 @@ plan.
 
 ### F-03: Input verification failures are discarded
 
-**Status:** Confirmed · **Severity:** High · **Confidence:** High
+**Status:** Resolved (core defect) · **Severity:** High · **Confidence:** High
 
 - **Affected component:** Bitcoin previous-transaction verification, fee
   display, and SegWit signing.
@@ -832,8 +832,31 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
 **Regression test**
 
 [test_unverified_witness_utxo_input_is_flagged:44-71](../../test/tests_native/test_signing_authorization.py#L44-L71),
-red today: a `witness_utxo`-only input's amount reaches `meta` with no
-unverified signal.
+now green.
+
+**Resolution**
+
+Fixed in [manager.py:895-896](../../src/apps/wallets/manager.py#L895-L896): the
+discarded `inp.verify()` return value is now captured, and an unverified input
+sets `metainp["warning"] = "Input amount is NOT verified - previous
+transaction missing!"`. This closes the core defect (action-plan item 1, in
+its per-input form) and the regression test above now passes.
+
+Deliberately per-input rather than `meta["warnings"]` — the action plan's own
+snippet appends to the global list unconditionally, which would have broken
+[test_preprocess_single_wallet_tx_produces_no_warning](../../test/tests_native/test_wallet_manager_warnings.py#L148),
+an existing green test whose fixture PSBT carries `witness_utxo` only (no
+`non_witness_utxo`) and asserts no `meta["warnings"]` key at all.
+
+**Still open, not covered by this fix or its test:**
+
+- GUI surfacing of `fee_verified` / `Fee: ~N satoshi (UNVERIFIED)` (action-plan
+  item 2) — the warning is recorded in `meta` but nothing renders it yet.
+- The fatal-instead-of-warn option (item 3).
+- The F-24 fee sanity check as defense in depth (item 4).
+- The identical discarded-`verify()` call in
+  [liquid/manager.py:294](../../src/apps/wallets/liquid/manager.py#L294) — not
+  touched, and not exercised by any test.
 
 ---
 
@@ -3148,8 +3171,7 @@ can never fully replace identity. Restrict labels to a short printable-ASCII set
   change or on fee context.
 - **Prerequisites:** The user follows the default confirmation view.
 - **Default reachability:** Every ordinary Bitcoin transaction confirmation.
-- **Impact on funds:** The fee gap is the missing compensating control for
-  F-03.
+- **Impact on funds:** The fee gap is the missing compensating control for F-03.
 - **Physical access required:** No.
 - **Malicious host required:** Yes.
 - **Malicious SD/QR/USB input required:** Yes.

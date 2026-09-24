@@ -57,14 +57,19 @@ class MessageApp(BaseApp):
             message = a2b_base64(message[len(b"base64:") :])
         else:
             raise AppError("Invalid message encoding!")
-        # try to decode with ascii characters
-        try:
+        # explicit byte validation - .decode("ascii") does not actually
+        # enforce ASCII (embedded NUL and other control bytes decode fine),
+        # so a hex dump is the only safe fallback for anything not printable
+        MAX_MSG_LEN = 512
+        if len(message) > MAX_MSG_LEN:
+            raise AppError("Message too long (%d > %d bytes)" % (len(message), MAX_MSG_LEN))
+        printable = all(0x20 <= b <= 0x7E or b == 0x0A for b in message)
+        if printable:
             msg = "Message:\n\n"
             msg += "__________________________________\n"
-            msg += message.decode("ascii")
+            msg += message.decode()
             msg += "\n__________________________________"
-            # ask the user if he really wants to sign this message
-        except:
+        else:
             msg = "Hex message:\n\n%s" % hexlify(message).decode()
         scr = Prompt(
             "Sign message with private key at %s?" % bip32.path_to_str(derivation_path),
