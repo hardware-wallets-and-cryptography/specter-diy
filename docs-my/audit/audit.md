@@ -1414,8 +1414,10 @@ address-type mapping, or omit the address.
         raise AppError("Message too long (%d > %d bytes)" % (len(message), MAX_MSG_LEN))
     printable = all(0x20 <= b <= 0x7E or b == 0x0A for b in message)
     if printable:
-        msg = "Message:\n\n__________________________________\n" \
-              + message.decode() + "\n__________________________________"
+        msg = "Message:\n\n"
+        msg += "__________________________________\n"
+        msg += message.decode()
+        msg += "\n__________________________________"
     else:
         msg = "Hex message:\n\n%s" % hexlify(message).decode()
   ```
