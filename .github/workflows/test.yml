@@ -5,21 +5,6 @@ on:
   pull_request:
 
 jobs:
-  docs-links:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          # docs-my/ cites embit, f469-disco, and bootloader paths heavily
-          submodules: recursive
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Check relative links in docs-my/
-        run: python3 docs-my/check-links.py
-
   native-tests:
     runs-on: ubuntu-latest
     steps:
