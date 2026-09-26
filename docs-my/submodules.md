@@ -106,3 +106,38 @@ git submodule sync --recursive
 
 This does not affect the pin — `8ea3980` is present on the fork's `dev`, `int`
 and `master` — only where a re-fetch goes.
+
+**Fetching each submodule's `dev` branch by hand.** `git submodule update
+--init --remote` fetches from whatever `origin` is *currently configured
+inside the submodule*, not the URL in `.gitmodules` — if that local `origin`
+is stale, the fetch can fail with `fatal: Unable to find refs/remotes/origin/dev
+revision in submodule path '<path>'` even though `dev` exists on the correct
+fork. Sync first, from the superproject root:
+
+```sh
+git submodule sync -- bootloader f469-disco
+git submodule update --init --remote -- bootloader f469-disco
+```
+
+Or do it manually inside each submodule, for full control:
+
+```sh
+cd bootloader
+git remote set-url origin https://github.com/hardware-wallets-and-cryptography/specter-bootloader.git
+git fetch origin
+git checkout dev
+git pull origin dev
+cd ..
+
+cd f469-disco
+git remote set-url origin https://github.com/hardware-wallets-and-cryptography/f469-disco.git
+git fetch origin
+git checkout dev
+git pull origin dev
+cd ..
+```
+
+Either way this moves the submodule to the tip of `dev`, which will show as a
+modified gitlink in the superproject (`git status`) if that tip differs from
+the recorded pin — commit it there to update the pin, per the `--remote`
+warning above.
