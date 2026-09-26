@@ -1,4 +1,5 @@
 #!/bin/bash
+
 # Abort on the first failure. Otherwise, the script continues after
 # a failed compile, prints "saved to ..." for missing files, and returns
 # a false 0 exit code, which can cause a broken build to output
