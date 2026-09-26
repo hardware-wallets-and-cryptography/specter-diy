@@ -4,7 +4,7 @@
 
 | Submodule | Remote | Fork? | Pinned commit | Describe | Branch (`branch =`) |
 |-----------|--------|:-----:|---------------|----------|---------------------|
-| `f469-disco/usermods/udisplay_f469/lvgl` | `lvgl/lvgl` | ❌ | `dd100e5` | `v6.0.2-31-gdd100e5e0` | — |
+| `f469-disco/usermods/udisplay_f469/lvgl` | `lvgl/lvgl` | ❌ | `dd100e5` | `v6.0.2-31-gdd100e5` | — |
 | `bootloader/lib/secp256k1` | `bitcoin-core/secp256k1` | ❌ | `5e1c885` | `v0.2.0~173` | — |
 | `bootloader` | `hardware-wallets-and-cryptography/specter-bootloader` | ✅ | `c331570` | `v1.0.0-22-gc331570` | `dev` |
 | `bootloader/lib/fatfs` | `hardware-wallets-and-cryptography/fatfs` | ✅ | `8ea3980` | `R0.14-2-g8ea3980` | `dev` |
@@ -15,12 +15,36 @@
 | `f469-disco/usermods/secp256k1/secp256k1` | `hardware-wallets-and-cryptography/secp256k1-zkp` | ✅ | `d9560e0` | `d9560e0a` | — |
 | `f469-disco/usermods/secp256k1` | `hardware-wallets-and-cryptography/secp256k1-embedded` | ✅ | `0502cf4` | `0502cf4` | `secp-zkp--int` |
 
-> **8 forked / 2 external.**
+> **8 forked / 2 external**
 
 > Remote `secp256k1-zkp` appears twice — under `usermods/secp256k1` and under
 > `embit/secp256k1` — both from the same fork and at the same commit `d9560e0`,
 > so there is no version skew between the two checkouts. **Only the `usermods`
 > copy reaches firmware; keep the two in step when bumping.**
+
+### What reaches the device
+
+Firmware (`make disco`; paths relative to repo root):
+
+- `f469-disco/micropython` — the build (`make -C f469-disco/micropython/ports/stm32`)
+- `f469-disco/usermods/secp256k1` + its `secp256k1/` tree — compiled into the
+  signing usermod (`USER_C_MODULES=f469-disco/usermods`)
+- `f469-disco/usermods/udisplay_f469/lvgl` — compiled into the display usermod
+  (its `micropython.mk` includes `lvgl/lvgl.mk`)
+- `f469-disco/libs/common/embit` — frozen as Python. Chain:
+  `manifests/disco.py` → `f469-disco/manifests/disco.py` → `common.py` →
+  `embit.py`. `embit.py` walks `embit/src` and skips `embit/util` (CPython-only
+  backends — firmware uses the C usermod); `common.py` skips `embit`, so no
+  double-freeze. `manifests/disco.py` also freezes `src/` and `boot/main`
+  (`debug.py`: `boot/debug`).
+
+Bootloader (separate binary, packed into `initial_firmware.bin` by
+`build_firmware.sh`):
+
+- `bootloader/lib/secp256k1` and `bootloader/lib/fatfs` — compiled by
+  `bootloader/platforms/stm32f469disco/bootloader/Makefile`
+
+Not built: `f469-disco/libs/common/embit/secp256k1/secp256k1-zkp`.
 
 The `embit/secp256k1/` checkout is a C source tree, not a Python package. It sits
 next to code that does `import secp256k1`, which under CPython would make it an
