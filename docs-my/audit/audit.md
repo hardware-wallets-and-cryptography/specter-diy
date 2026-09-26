@@ -905,18 +905,20 @@ an existing green test whose fixture PSBT carries `witness_utxo` only (no
 ### F-04: Derived keys are signed without the root-key script-membership check
 
 **Status:** Partially remediated (2026-09-24) — see **Remediation** at the end
-of this entry. Action item 1 (the actual signing-oracle defect) is fixed.
-Items 2 and 3 are still open. **Severity:** High · **Confidence:** High for the
-defect and its reachability; Medium for a completed theft chain, which depends
-on what else the target key signs.
+of this entry.  
+*Action item 1* is **fixed** (the actual signing-oracle defect).  
+*Action items 2 and 3* are **still open**.  
+**Severity:** High  
+**Confidence:** High for the defect and its reachability; Medium for a completed
+theft chain, which depends on what else the target key signs.
 
 - **Affected component:** PSBT key derivation and input signing.
 - **Files and code regions:**
-  [psbtview.py:787-824](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L787-L824),
-  [psbtview.py:854-871](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L854-L871);
-  [manager.py:373-386](../../src/apps/wallets/manager.py#L373-L386),
-  [manager.py:785-792](../../src/apps/wallets/manager.py#L785-L792);
-  [ram.py:77-78](../../src/keystore/ram.py#L77-L78).
+  - [psbtview.py:787-824](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L787-L824),
+  - [psbtview.py:854-871](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L854-L871);
+  - [manager.py:373-386](../../src/apps/wallets/manager.py#L373-L386),
+  - [manager.py:785-792](../../src/apps/wallets/manager.py#L785-L792);
+  - [ram.py:77-78](../../src/keystore/ram.py#L77-L78).
 - **Functions and modules:** `PSBTView.sign_input`, wallet-manager signing,
   `RAMKeyStore.sign_input`.
 - **Attacker capability:** Know a device xpub and supply matching BIP32
@@ -962,13 +964,13 @@ for prv, pub in derived_keypairs:
 ```
 
 The only gates on `derived_keypairs`
-([psbtview.py:787-824](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L787-L824))
+([psbtview.py:850-887](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L850-L887))
 are a matching 4-byte device fingerprint, which is host-supplied, and
 `hdkey.xonly() == pub.xonly()`, which the attacker satisfies by computing `pub`
 themselves from a known xpub for the path they chose.
 [ram.py:77-78](../../src/keystore/ram.py#L77-L78) passes `self.root`, the master
 key, so the path is unconstrained.
-[manager.py:792](../../src/apps/wallets/manager.py#L792) calls
+[manager.py:1031](../../src/apps/wallets/manager.py#L1031) calls
 `keystore.sign_input` for every input, whether or not a wallet resolved.
 
 The guard also compares **x-only** keys:
@@ -1001,7 +1003,7 @@ authorization by the input script. F-05 supplies the xpub that makes the
 derivation records constructible, and F-19 governs whether the surrounding
 warnings are on screen at all.
 
-**Code at this tree**
+**Code changes at this tree**
 
 [psbtview.py:857-867](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L857-L867):
 
@@ -1064,39 +1066,60 @@ not x-only keys, outside Taproot.
 
 **Regression test**
 
-[test_signing_refuses_key_absent_from_input_script:100-153](../../test/tests_native/test_signing_authorization.py#L100-L153),
-now green — see **Remediation** below.
+[test_signing_refuses_key_absent_from_input_script:100-153](../../test/tests_native/test_signing_authorization.py#L100-L153), now green — see **Remediation** below.
 
 **Remediation**
 
-Status as of 2026-09-24. Full write-up, exact diffs, and repo/branch/commit
-state: [embit--unit-tests-failed.md](embit--unit-tests-failed.md).
+Status as of 2026-09-24.
 
-- **Action item 1 — done.** `PSBTView.sign_input`'s derived-key loop now
-  applies the same `sec`/`pkh` script-membership check the root key already
-  had, before signing with any derived key. This is the fix that actually
-  closes the signing oracle: an attacker-fabricated `bip32_derivation`
-  entry whose key is absent from the input's script no longer produces a
-  signature. Regression test above is green.
-  Lives in the `embit` fork, uncommitted at time of writing on branch
-  `fix/f-04-derived-key-signing-oracle` (not yet pushed).
+- **Action item 1 — done.** `PSBTView.sign_input`'s derived-key loop
+  ([psbtview.py:926-937](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926-L937))
+  now applies the same `sec`/`pkh` script-membership check the root key
+  already had, before signing with any derived key:
+
+  ```diff
+   for prv, pub in derived_keypairs:
+  +    der_sec = pub.sec()
+  +    der_pkh = hashes.hash160(der_sec)
+  +    if der_sec not in sc.data and der_pkh not in sc.data:
+  +        continue
+       sig = prv.sign(h)
+       inp.partial_sigs[pub] = sig.serialize() + bytes([inp_sighash])
+       counter += 1
+  ```
+
+  This is the fix that actually closes the signing oracle: an
+  attacker-fabricated `bip32_derivation` entry whose key is absent from the
+  input's script no longer produces a signature. Regression test above is
+  green. Confirmed by running `python3 test/run_native_tests.py`.
 - **Action item 2 — still open.** The x-only-vs-x-only comparison
   (`if hdkey.xonly() != pub.xonly()`) is unchanged and still used for
   non-Taproot inputs, where the parity byte matters. Not covered by the
   regression test above; no code change made.
 - **Action item 3 — not implemented as recommended; superseded.**
-  `manager.py`'s `sign_psbtview` still calls `self.keystore.sign_input(...)`
-  unconditionally for every input, regardless of whether a wallet resolved
-  for it — the per-input skip this item recommended was not added. Instead,
-  a narrower change was made: the `if sig_count == 0: raise WalletError(...)`
-  diagnostic right after the signing loop was removed, because item 1's fix
-  made it fire for the legitimate "all-forged PSBT correctly signs nothing"
-  case, which is indistinguishable at that level from the pre-existing
-  "forgot to import wallet" case. This does not reopen the vulnerability —
-  item 1 already makes the unconditional `keystore.sign_input` call safe —
-  but it means item 3's defense-in-depth (avoiding the call entirely for
-  unresolved inputs) is still absent. Already part of the local commit
-  `ed57fab` on `specter-diy` (not yet pushed).
+  `manager.py`'s `sign_psbtview`
+  ([manager.py:1011-1036](../../src/apps/wallets/manager.py#L1011-L1036))
+  still calls `self.keystore.sign_input(...)` unconditionally for every
+  input, regardless of whether a wallet resolved for it — the per-input skip
+  this item recommended was not added. Instead, a narrower change was made:
+  the diagnostic right after the signing loop was removed —
+
+  ```diff
+                   sig_stream.write(b"\x00")
+  -        if sig_count == 0:
+  -            raise WalletError("We didn't add any signatures!\n\nMaybe you forgot to import the wallet?\n\nScan the wallet descriptor to import it.")
+           # remove unnecessary stuff:
+           with open(self.tempdir+"/sigs", "rb") as sig_stream:
+               psbtv.write_to(out_stream, compress=CompressMode.PARTIAL, extra_input_streams=[sig_stream])
+  ```
+
+  because item 1's fix made it fire for the legitimate "all-forged PSBT
+  correctly signs nothing" case, which is indistinguishable at that level
+  from the pre-existing "forgot to import wallet" case (both produce
+  `wallets == {None: ...}`). This does not reopen the vulnerability — item 1
+  already makes the unconditional `keystore.sign_input` call safe — but it
+  means item 3's defense-in-depth (avoiding the call entirely for unresolved
+  inputs) is still absent.
 
 Net effect: the theft-chain path this finding describes is closed. The two
 remaining items are narrower, pre-existing-severity-unchanged loose ends
