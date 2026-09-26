@@ -6,24 +6,25 @@
 |---|---|:--:|---|---|---|
 | `bootloader` | `hardware-wallets-and-cryptography/specter-bootloader` | ✅ | `c331570` | `v1.0.0-22-gc331570` | `dev` |
 | `bootloader/lib/fatfs` | `hardware-wallets-and-cryptography/fatfs` | ✅ | `8ea3980` | `R0.14-2-g8ea3980` | `dev` |
-| `bootloader/lib/secp256k1` | `bitcoin-core/secp256k1` | ❌ | `5e1c885` | `5e1c885` | — |
-| `f469-disco` | `hardware-wallets-and-cryptography/f469-disco` | ✅ | `de1abb4` | `v1.3.1-19-gde1abb4` | `dev` |
-| `f469-disco/libs/common/embit` | `hardware-wallets-and-cryptography/embit` | ✅ | `eb6104f` | `v0.8.2` | `dev` |
-| `f469-disco/libs/common/embit/secp256k1/secp256k1-zkp` | `ElementsProject/secp256k1-zkp` | ❌ | `d9560e0` | `d9560e0a` | — |
+| `bootloader/lib/secp256k1` | `bitcoin-core/secp256k1` | ❌ | `5e1c885` | `v0.2.0~173` | — |
+| `f469-disco` | `hardware-wallets-and-cryptography/f469-disco` | ✅ | `69909b0` | `v1.3.1-12-g69909b0` | `dev` |
+| `f469-disco/libs/common/embit` | `hardware-wallets-and-cryptography/embit` | ✅ | `d418ef3` | `v0.8.2-4-gd418ef3` | `int` |
+| `f469-disco/libs/common/embit/secp256k1/secp256k1-zkp` | `hardware-wallets-and-cryptography/secp256k1-zkp` | ✅ | `d9560e0` | `d9560e0a` | `dev` |
 | `f469-disco/micropython` | `hardware-wallets-and-cryptography/micropython` | ✅ | `6bdf1b6` | `v1.10-1185-g6bdf1b691` | — |
-| `f469-disco/usermods/secp256k1` | `hardware-wallets-and-cryptography/secp256k1-embedded` | ✅ | `1e74fc3` | `1e74fc3` | `secp-zkp` |
+| `f469-disco/usermods/secp256k1` | `hardware-wallets-and-cryptography/secp256k1-embedded` | ✅ | `0502cf4` | `0502cf4` | `secp-zkp--int` |
 | `f469-disco/usermods/secp256k1/secp256k1` | `ElementsProject/secp256k1-zkp` | ❌ | `d9560e0` | `d9560e0a` | — |
-| `f469-disco/usermods/udisplay_f469/lvgl` | `lvgl/lvgl` | ❌ | `dd100e5` | `v6.0.2-31-gdd100e5e0` | `release/v6` |
+| `f469-disco/usermods/udisplay_f469/lvgl` | `lvgl/lvgl` | ❌ | `dd100e5` | `v6.0.2-31-gdd100e5e0` | — |
 
-**6 forked, 4 external.** Note `secp256k1-zkp` appears twice — once under
-`usermods/secp256k1`, once under `embit/secp256k1` — both at the same commit
-`d9560e0`, so there is no version skew between the two checkouts.
+**7 forked, 3 external.** Note `secp256k1-zkp` appears twice — once forked under
+`embit/secp256k1` (tracking `dev`), once external under `usermods/secp256k1`
+(`ElementsProject` directly) — both currently at the same commit `d9560e0`, so
+there is no version skew between the two checkouts despite the different remotes.
 
 The `embit/secp256k1/` checkout is a C source tree, not a Python package. It sits
 next to code that does `import secp256k1`, which under CPython would make it an
 implicit namespace package; `embit/src/embit/util/secp256k1.py` guards against
-that explicitly. It is outside the freeze root (`manifests/embit.py` walks only
-`embit/src`), so it never reaches firmware.
+that explicitly. It is outside the freeze root (`f469-disco/manifests/embit.py`
+walks only `embit/src`), so it never reaches firmware.
 
 ## Reproducibility
 
@@ -82,18 +83,20 @@ whole directory trees, so stray files can end up compiled into firmware or break
 the build.
 
 **What can still break reproducibility.** The pins are only as durable as the
-remotes hosting them. For the four external remotes — `ElementsProject/secp256k1-zkp`
-(×2), `bitcoin-core/secp256k1`, `lvgl/lvgl` — a force-push or repository deletion
-upstream would make a fresh `--recursive` clone fail, and the pinned objects would
-then survive only in existing local clones. All four are C crypto or display
-sources; three reach signing or bootloader firmware (the `embit/secp256k1/` copy
-is outside the freeze root).
+remotes hosting them. For the three external remotes — `ElementsProject/secp256k1-zkp`
+(only the `usermods/secp256k1/secp256k1` instance; the `embit/secp256k1/secp256k1-zkp`
+instance is now forked, see the map above), `bitcoin-core/secp256k1`, `lvgl/lvgl` —
+a force-push or repository deletion upstream would make a fresh `--recursive` clone
+fail, and the pinned objects would then survive only in existing local clones. All
+three are C crypto or display sources reaching signing, bootloader, or display
+firmware.
 
-If the reason for forking `micropython`, `secp256k1-embedded`, `embit` and
-`fatfs` was to control that exposure, the same argument covers these.
+If the reason for forking `micropython`, `secp256k1-embedded`, `embit`, `fatfs`
+and (since) `embit`'s nested `secp256k1-zkp` was to control that exposure, the
+same argument covers the two still-external crypto remotes.
 `bitcoin-core/secp256k1` is declared in the bootloader repo's own `.gitmodules`,
 so forking it requires a commit there as well — as was done for `fatfs` in
-`c331570`.
+`c331570` and for `embit/secp256k1/secp256k1-zkp`.
 
 **Stale local remote.** The `fatfs` fork is recorded in `bootloader/.gitmodules`
 at the pinned commit, but an already-initialised checkout keeps the old
