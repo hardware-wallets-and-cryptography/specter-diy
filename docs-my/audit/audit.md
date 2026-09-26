@@ -845,9 +845,7 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
    +    )
    +    unverified_inputs += 1
    ```
-2. Set `meta["fee_verified"] = (unverified_inputs == 0)` and have
-   [transaction.py:68-79](../../src/gui/screens/transaction.py#L68-L79) render
-   `Fee: ~N satoshi (UNVERIFIED)` in `style_warning` when it is False.
+2. Change:
 
    In `manager.py`, around the input loop:
 
@@ -877,8 +875,7 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
    +        fee.set_style(0, style if fee_verified else style_warning)
             fee.align(obj, lv.ALIGN.OUT_BOTTOM_MID, 0, 30)
    ```
-3. Preferred, if no wallet depends on unverified amounts: make it fatal —
-   `raise WalletError("Missing non_witness_utxo for input %d" % i)`.
+3. Preferred, if no wallet depends on unverified amounts.
 
    In `manager.py`, instead of the step 1 warning:
 
