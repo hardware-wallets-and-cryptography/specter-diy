@@ -741,28 +741,37 @@ result.
 
 ## 6. Findings
 
-Findings are ordered by severity: High, then Medium and Low. Within a severity
-level they are ordered by identifier. Identifiers are stable handles and are not
-contiguous.
+Findings are ordered by severity: **High**, then **Medium** and **Low**.
 
-Each finding starts with a classification block, then evidence, an attack trace,
-why existing checks do not stop it, and a recommended fix with a concrete action
-plan.
+Within a severity level they are ordered by identifier.
+
+Identifiers are stable handles and are not contiguous.
+
+Each finding starts with a classification block, then evidence,
+an attack trace, why existing checks do not stop it, and a recommended
+fix with a concrete action plan.
 
 ---
 
 ### F-03: Input verification failures are discarded
 
-**Status:** Resolved (core defect) · **Severity:** High · **Confidence:** High
+| Criterion | Value |
+|----------|-------|
+| Status | Resolved (core defect) |
+| Severity | High |
+| Confidence | High |
+| Physical access required | ❌ No |
+| Malicious host required | ✅ Yes |
+| Malicious SD/QR/USB input required | ✅ Yes |
+| Malicious firmware update required | ❌ No |
+| Prior compromise required | ❌ No |
+| Deterministic or probabilistic | Deterministic |
+| Owning codebase | This repository, `embit` submodule
+| Files and code regions | [manager.py](../../src/apps/wallets/manager.py), [psbt.py](../../f469-disco/libs/common/embit/src/embit/psbt.py) |
+| Functions and modules | Wallet-manager PSBT preprocessing, `InputScope.verify` |
 
 - **Affected component:** Bitcoin previous-transaction verification, fee
   display, and SegWit signing.
-- **Files and code regions:**
-  [manager.py:648-699](../../src/apps/wallets/manager.py#L648-L699), in
-  particular [manager.py:653-655](../../src/apps/wallets/manager.py#L653-L655);
-  [psbt.py:271-299](../../f469-disco/libs/common/embit/src/embit/psbt.py#L271-L299).
-- **Functions and modules:** Wallet-manager PSBT preprocessing,
-  `InputScope.verify`.
 - **Attacker capability:** Supply a multi-input SegWit PSBT and cause more than
   one signing attempt.
 - **Prerequisites:** Inputs controlled by the victim, and user approval of each
@@ -771,15 +780,8 @@ plan.
   previous transactions.
 - **Impact on funds:** Individually valid signatures can be combined into a
   transaction that pays an arbitrarily large miner fee.
-- **Physical access required:** No.
-- **Malicious host required:** Yes.
-- **Malicious SD/QR/USB input required:** Yes.
-- **Malicious firmware update required:** No.
-- **Prior compromise required:** No.
-- **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** Every input amount that contributes to the
   displayed fee must be authenticated before signing.
-- **Owning codebase:** This repository, `embit` submodule.
 
 **Evidence**
 
@@ -821,29 +823,6 @@ Two things make this easier than a first reading suggests:
 Committing to the amount of the currently signed input does not authenticate the
 other inputs whose false amounts drive the fee display.
 
-**Code at this tree**
-
-[manager.py:654](../../src/apps/wallets/manager.py#L654):
-
-```python
-# verify, do not require non_witness_utxo if witness_utxo is set
-inp.verify(ignore_missing=True)
-```
-
-The return value is discarded. `grep -rn "is_verified" src/` returns **zero**
-hits, so the `embit` API built for exactly this purpose is never consulted, even
-though `InputScope.verify` sets `self._verified` at
-[psbt.py:297-299](../../f469-disco/libs/common/embit/src/embit/psbt.py#L297-L299).
-
-The Liquid manager makes the identical call at
-[liquid/manager.py:294](../../src/apps/wallets/liquid/manager.py#L294).
-
-Per-input values are drawn only on `page2`
-([transaction.py:107-160](../../src/gui/screens/transaction.py#L107-L160)), and
-`meta["warnings"]` carries nothing about input verification or fee magnitude —
-`add_warnings` populates it for input provenance only
-([manager.py:989-1007](../../src/apps/wallets/manager.py#L989-L1007)).
-
 **Recommended fix**
 
 Treat `verify()` returning `False` as fatal. If support for unverified amounts
@@ -855,20 +834,60 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
 1. In [manager.py:648-699](../../src/apps/wallets/manager.py#L648-L699), capture
    and act on the result:
 
-   ```python
-   verified = inp.verify(ignore_missing=True)
-   if not verified:
-       metainp["warning"] = "Input amount is NOT verified - previous transaction missing!"
-       meta.setdefault("warnings", []).append(
-           "Input %d amount is unverified. The displayed fee may be wrong." % i
-       )
-       unverified_inputs += 1
+   ```diff
+    # verify, do not require non_witness_utxo if witness_utxo is set
+   -inp.verify(ignore_missing=True)
+   +verified = inp.verify(ignore_missing=True)
+   +if not verified:
+   +    metainp["warning"] = "Input amount is NOT verified - previous transaction missing!"
+   +    meta.setdefault("warnings", []).append(
+   +        "Input %d amount is unverified. The displayed fee may be wrong." % i
+   +    )
+   +    unverified_inputs += 1
    ```
 2. Set `meta["fee_verified"] = (unverified_inputs == 0)` and have
    [transaction.py:68-79](../../src/gui/screens/transaction.py#L68-L79) render
    `Fee: ~N satoshi (UNVERIFIED)` in `style_warning` when it is False.
+
+   In `manager.py`, around the input loop:
+
+   ```diff
+   +unverified_inputs = 0
+    for i in range(psbtv.num_inputs):
+        ...
+   +meta["fee_verified"] = (unverified_inputs == 0)
+   ```
+
+   In `transaction.py`:
+
+   ```diff
+        if meta.get("fee"):
+            if send_amount > 0:
+                fee_percent = meta["fee"] * 100 / send_amount
+                fee_txt = "%d satoshi (%.2f%%)" % (meta["fee"], fee_percent)
+            # back to wallet
+            else:
+                fee_txt = "%d satoshi" % (meta["fee"])
+   -        fee = add_label("Fee: " + fee_txt, scr=self.page)
+   -        fee.set_style(0, style)
+   +        fee_verified = meta.get("fee_verified", False)
+   +        if not fee_verified:
+   +            fee_txt = "~" + fee_txt + " (UNVERIFIED)"
+   +        fee = add_label("Fee: " + fee_txt, scr=self.page)
+   +        fee.set_style(0, style if fee_verified else style_warning)
+            fee.align(obj, lv.ALIGN.OUT_BOTTOM_MID, 0, 30)
+   ```
 3. Preferred, if no wallet depends on unverified amounts: make it fatal —
    `raise WalletError("Missing non_witness_utxo for input %d" % i)`.
+
+   In `manager.py`, instead of the step 1 warning:
+
+   ```diff
+    # verify, do not require non_witness_utxo if witness_utxo is set
+   -inp.verify(ignore_missing=True)
+   +if not inp.verify(ignore_missing=True):
+   +    raise WalletError("Missing non_witness_utxo for input %d" % i)
+   ```
 4. Add the F-24 fee sanity check as the compensating control.
 
 **Regression test**
@@ -932,15 +951,19 @@ theft chain, which depends on what else the target key signs.
   of a transaction the host fully builds. The host does not need to own a UTXO;
   the input can be fabricated. This is a signing oracle, not just a missing
   check.
-- **Physical access required:** No.
-- **Malicious host required:** Yes.
-- **Malicious SD/QR/USB input required:** Yes.
-- **Malicious firmware update required:** No.
-- **Prior compromise required:** No.
-- **Deterministic or probabilistic:** Deterministic.
 - **Security property violated:** A derived private key must sign only when its
   public key is authorized by the input script or by an explicit wallet policy.
 - **Owning codebase:** This repository, `embit` submodule.
+
+| Criterion | Value |
+|-----------|-------|
+| Physical access required | ❌ No |
+| Malicious host required | ✅ Yes |
+| Malicious SD/QR/USB input required | ✅ Yes |
+| Malicious firmware update required | ❌ No |
+| Prior compromise required | ❌ No |
+| Deterministic or probabilistic | Deterministic |
+
 
 **Evidence**
 
