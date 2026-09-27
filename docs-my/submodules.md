@@ -2,17 +2,17 @@
 
 ## Map
 
-Single source of truth for pins.  
-Forks live under `hardware-wallets-and-cryptography/`.  
-Paths are relative to this repo's root.  
-Drift snapshot as of `2026-09-26`.  
+- The table below is a single source of truth for pins
+- Forks live under `hardware-wallets-and-cryptography/`
+- Paths are relative to this repo's root
+- Drift snapshot as of `2026-09-26`
 
 | Submodule | Remote | Fork | Pin | Describe | `--remote` target | Drift past pin | Pin reachable from | Binary |
 |---|---|:-:|---|---|---|---|---|:-:|
 | `bootloader` | `specter-bootloader` | ✅ | `c331570` | `v1.0.0-22-gc331570` | `dev` (`branch =`) | 0 | `dev` only | bootloader |
 | `bootloader/lib/fatfs` | `fatfs` | ✅ | `8ea3980` | `R0.14-2-g8ea3980` | `dev` (`branch =`) | 0 | `dev`, `int`, `master` | bootloader |
 | `bootloader/lib/secp256k1` | `bitcoin-core/secp256k1` | ❌ | `5e1c885` | `v0.2.0~173` | `master` (default) | **1824** (→ `f14d299`) | `master`, 12 tags | bootloader |
-| `f469-disco` | `f469-disco` | ✅ | `4974ea0` | `v1.3.1-17-g4974ea0` | `dev` (`branch =`) | 0 | `dev` only | firmware |
+| `f469-disco` | `f469-disco` | ✅ | `41446cc` | `v1.3.1-17-g41446cc` | `dev` (`branch =`) | 0 | `dev` only | firmware |
 | `f469-disco/micropython` | `micropython` | ✅ | `6bdf1b6` | `v1.10-1185-g6bdf1b691` | `master` (default) | 0 | fork `master` | firmware |
 | `f469-disco/usermods/secp256k1` | `secp256k1-embedded` | ✅ | `0502cf4` | — | `secp-zkp--int` (`branch =`) | 0 | `secp-zkp--int` only | firmware |
 | `f469-disco/usermods/secp256k1/secp256k1` | `secp256k1-zkp` | ✅ | `d9560e0` | — | `master` (default) | **1949** (→ `037cc6d`) | `master`, `dev`, `int` | firmware |
