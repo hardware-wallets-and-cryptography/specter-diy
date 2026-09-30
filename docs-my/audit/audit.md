@@ -72,46 +72,6 @@ impact stay open.
 
 ### 1.2 Git and submodule state
 
-Recursive submodule pins at this tree:
-
-| Submodule | Remote | Fork? | Pinned commit | Describe | `branch =` | Security-relevant notes |
-|---|---|:--:|---|---|---|---|
-| `bootloader` | `hardware-wallets-and-cryptography/specter-bootloader` | ✅ | `c331570` | `v1.0.0-22-gc331570` | `dev` (`.gitmodules:9`) | Firmware root of trust. Owns F-08, F-17, F-25, F-33, H-20 |
-| `bootloader/lib/fatfs` | `hardware-wallets-and-cryptography/fatfs` | ✅ | `8ea3980` | `R0.14-2-g8ea3980` | `dev` (`bootloader/.gitmodules:8`) | Bootloader-side filesystem parser. Not reviewed for memory safety |
-| `bootloader/lib/secp256k1` | `bitcoin-core/secp256k1` | ❌ | `5e1c885` | `5e1c885` | — | — |
-| `f469-disco` | `hardware-wallets-and-cryptography/f469-disco` | ✅ | `de1abb4` | `v1.3.1-19-gde1abb4` | `dev` (`.gitmodules:4`) | Board support, user modules, and the vendored Python libraries below |
-| `f469-disco/libs/common/embit` | `hardware-wallets-and-cryptography/embit` | ✅ | `eb6104f` | `v0.8.2` | `dev` (`f469-disco/.gitmodules:18`) | PSBT/PSET and address layer, at `libs/common/embit/src/embit/`. Owns F-04, F-10, F-35, F-36, H-15 item 3, H-26 |
-| `f469-disco/libs/common/embit/secp256k1/secp256k1-zkp` | `ElementsProject/secp256k1-zkp` | ❌ | `d9560e0` | `d9560e0a` | — | Same commit as `usermods/secp256k1/secp256k1` below — no version skew between the two checkouts |
-| `f469-disco/micropython` | `hardware-wallets-and-cryptography/micropython` | ✅ | `6bdf1b6` | `v1.10-1185-g6bdf1b691` | — | Merge-base `10709846f` = `v1.12-35`, so the interpreter base is from 2019. 63 fork-only commits, all inspected. See D-01, D-02 |
-| `f469-disco/usermods/secp256k1` | `hardware-wallets-and-cryptography/secp256k1-embedded` | ✅ | `1e74fc3` | `1e74fc3` | `secp-zkp` (`f469-disco/.gitmodules:13`) | Nested gitlink pins `secp256k1-zkp` at `d9560e0`. Owns F-13, F-31, H-01, H-09, H-16, H-17 |
-| `f469-disco/usermods/secp256k1/secp256k1` | `ElementsProject/secp256k1-zkp` | ❌ | `d9560e0` | `d9560e0a` | — | Same commit as `embit/secp256k1-zkp` above |
-| `f469-disco/usermods/udisplay_f469/lvgl` | `lvgl/lvgl` | ❌ | `dd100e5` | `v6.0.2-31-gdd100e5e0` | `release/v6` (`f469-disco/.gitmodules:8`) | Upstream `lvgl/lvgl` `v6.0.2-31`. No fork divergence. About seven years old |
-
-**6 of 10 point at forks under one GitHub org** (`hardware-wallets-and-cryptography/*`)
-rather than upstream, and **6 carry a mutable `branch =`**. Only `lvgl/lvgl` and
-`bitcoin-core/secp256k1` point upstream; `ElementsProject/secp256k1-zkp` is a
-third-party fork used unmodified from two paths. Full reproducibility analysis
-in [`submodules.md`](../submodules.md).
-
-Separately, `ecmult_static_context.h` (checked in, not generated at build
-time) has all 1024 entries recomputed from `gen_context.c` and matched
-exactly — but no build-time recomputation check exists to catch future drift.
-
-The gitlink SHA is what actually gets checked out:
-a normal `git clone --recursive` / `git submodule update` fetches exactly
-that pinned commit, ignoring `branch =`.
-
-That field only takes effect under
-`git submodule update --remote`. So today, nothing is silently weakened — the
-pin holds. The risk is latent: the first `--remote` update (manual, or via a
-CI job that uses one) will silently move the dependency to the tip of a
-mutable branch, controlled by an account that is not the upstream project.
-
-The second consequence is that upstream equivalence is not established for the
-six forked trees. The pinned SHA's relation to upstream — identical, ahead by N,
-or diverged — is recorded nowhere in the repository, which is the same
-provenance problem D-02 records for the flattened native trees.
-
 **Action plan.**
 
 1. Decide whether the `branch =` lines are wanted. If the intent is reproducible
@@ -142,87 +102,13 @@ provenance problem D-02 records for the flattened native trees.
    if a maintainer bumps the gitlink without updating the comment. Prefer
    dropping `branch =` (main option above) unless the convenience is worth
    that maintenance cost.
+
 2. Record, for each of the six forked submodules, that the pinned SHA exists in
    the fork **and** its relation to the corresponding upstream commit. Keep the
    result in the repository — a `DEPENDENCIES.md` table or a CI check — so the
    next reader does not have to re-derive it. `f469-disco` and `embit` are
    expected to be ahead of upstream; the others should be identical or the
    divergence explained. See PATH-18.
-
-### 1.3 Branch state relative to `origin/master`
-
-This matters for the findings below, so it is stated up front. The audited
-branch is **not** a descendant of `origin/master`. Their merge base is
-`24d1137` (tag `v1.9.0`), and from there:
-
-```text
-git rev-list --count HEAD..origin/master   ->  33
-git rev-list --count origin/master..HEAD   ->  `____`
-```
-
-`____` commits on this side is/are `____` ("`____`"), that
-carry/carries **some** of `origin/master`'s work forward and leaves the rest behind.
-
-`git diff --stat HEAD origin/master -- src/ boot/ test/` reports `____` files and
-`____` insertions.
-
-Unit tests are failing. See this [detailed info](./unit-tests-fail.md).
-
-That covers `test/run_native_tests.py` only. The separate micropython-unix
-suite (`make test` → `test/run_tests.py`) also fails, on
-`WalletsTest.test_mixed_multipath_sortedmulti`
-([test/tests/test_wallets.py:13-31](../../test/tests/test_wallets.py#L13)):
-
-```text
-DescriptorError: All branches should have the same length
-```
-
-The test mixes one multipath key (`/<0;1>/*`) with one fixed-path key
-(`/0/*`) in a `sortedmulti`. BIP-389 allows that mix — a fixed key is meant
-to apply the same path to every derived branch — but the vendored embit's
-branch-uniformity check
-([`descriptor.py:36-38`](../../f469-disco/libs/common/embit/src/embit/descriptor/descriptor.py#L36))
-rejects any descriptor whose keys don't all report the same `num_branches`,
-with no exception for `num_branches == 1`. Embit's own test suite never
-exercises this mixed case either, so this isn't a regression, it's an
-always-broken combination.
-
-The micropython test harness
-([`f469-disco/tests/unittest.py:205-209`](../../f469-disco/tests/unittest.py#L205))
-re-raises on the first failure instead of collecting it, so the run aborts
-here: `test_sign`, `test_revault`, `test_compatibility`, and `test_helpers`
-(registered after `test_wallets` in
-[test/tests/__init__.py](../../test/tests/__init__.py)) never execute, and
-their state is unknown.
-
-The failing tests were added by `10bede2` ("Tests from upstream master").
-That label does not check out — this mixed-multipath case is absent from
-both specter-diy's and embit's actual upstream test suites, and embit never
-implemented it.
-
-**Action plan.**
-
-1. Wire `test_message_signing_display` and `test_signing_authorization` into
-   `test/tests_native/__init__.py` so they run, and triage whatever they report.
-2. Replace `ast.Str` with `ast.Constant` in `test_transaction_confirmation.py`
-   so the suite reports green and real regressions are visible again.
-3. Decide on the mixed-multipath descriptor case: either loosen embit's
-   `Descriptor.__init__` branch check to exclude `num_branches == 1` from the
-   uniformity requirement, or drop the four tests that assume it
-   (`test_mixed_multipath_sortedmulti`,
-   `test_stored_mixed_multipath_descriptor_loads`,
-   `test_mixed_multipath_recovery_miniscript`,
-   `test_mixed_multipath_liquid_descriptor`). Either way, re-run `make test`
-   afterward — `test_sign`, `test_revault`, `test_compatibility`, and
-   `test_helpers` have not executed on this branch and may hide further
-   failures.
-4. Before assuming this branch is caught up, diff the remaining 33 commits for
-   security content:
-
-   ```bash
-   git log --oneline HEAD..origin/master
-   git diff HEAD origin/master -- src/ boot/ test/
-   ```
 
 ## 2. Overall risk assessment
 
@@ -280,13 +166,6 @@ scriptPubKeys render as one address, and scripts with no address representation
 render as well-formed confidential addresses. The two encoders are the same
 code with the Liquid copy's validity checks commented out, which makes this the
 cheapest High-value fix in the report.
-
-**One structural observation sits above the individual findings**.
-This branch is still not a descendant of `origin/master`, but it carries that
-branch's security fixes for the wallet manager and the transaction screen.
-
-Section 1.3 records the current branch state and what remains to be checked
-across the `____` commits this branch is still behind.
 
 This report does not claim exhaustive repository security. Descriptor
 Miniscript and TapTree internals, Liquid issuance, flattened HAL/FatFs/USB
@@ -950,7 +829,6 @@ theft chain, which depends on what else the target key signs.
   check.
 - **Security property violated:** A derived private key must sign only when its
   public key is authorized by the input script or by an explicit wallet policy.
-- **Owning codebase:** This repository, `embit` submodule.
 
 | Criterion | Value |
 |-----------|-------|
