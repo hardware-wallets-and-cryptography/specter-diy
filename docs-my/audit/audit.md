@@ -5056,7 +5056,7 @@ reachable.
 | Prior compromise required | ✅ Yes |
 | Deterministic or probabilistic | The computational attack was not shown. Deterministic if a malicious archive matching the pin is accepted |
 | Owning codebase | This repository's build configuration and the external toolchain distributor |
-| Files and code regions | [Dockerfile:11](../../Dockerfile#L11) |
+| Files and code regions | [Dockerfile:12-15](../../Dockerfile#L12-L15) ([L12](../../Dockerfile#L12)) |
 | Functions and modules | The ARM toolchain download and verification build layer |
 
 - **Affected component:** Docker firmware build.
@@ -5128,15 +5128,20 @@ immutable release URL. Prefer authenticated, reproducible toolchain inputs.
    -RUN curl -sSfL -o arm-toolchain.tar.bz2 "https://developer.arm.com/-/media/Files/downloads/gnu-rm/9-2020q2/gcc-arm-none-eabi-9-2020-q2-update-x86_64-linux.tar.bz2?revision=05382cca-1721-44e1-ae19-1e7c3dc96118&rev=05382cca172144e1ae191e7c3dc96118&hash=3ACFE672E449EBA7A21773EE284A88BC7DFA5044" && \
    -    echo 2b9eeccc33470f9d3cda26983b9d2dc6 arm-toolchain.tar.bz2 > /tmp/arm-toolchain.md5 && \
    -    md5sum --check /tmp/arm-toolchain.md5 && rm /tmp/arm-toolchain.md5 && \
-   +# Integrity is checked using the SHA-256 digest published by ARM at <digest-source-url>
+   +# SHA-256 of the archive below. Source: <digest-source>
    +RUN curl -sSfL -o arm-toolchain.tar.bz2 "<immutable-release-url>" && \
    +    echo "<sha256>  arm-toolchain.tar.bz2" | sha256sum --check - && \
         tar xf arm-toolchain.tar.bz2 -C /opt && \
         rm arm-toolchain.tar.bz2
    ```
 
-   ARM publishes SHA-256 for the 9-2020-q2 archives; record where the digest
-   came from in a comment.
+   The three `<...>` values are placeholders; this review did not fill them.
+   It is not verified whether ARM published a SHA-256 digest for the 9-2020-q2
+   archives. If it did, pin that digest and cite where it was published. If ARM
+   published only MD5, download the archive once, check it against the current
+   MD5 (`2b9eeccc33470f9d3cda26983b9d2dc6`), compute its SHA-256 locally, and
+   pin that. Say in the comment that the digest was computed locally. Use a
+   URL that cannot change content, or a mirror that the project controls.
 2. Or make the Nix flake the release build path, so the toolchain comes from a
    content-addressed store with a `flake.lock` narHash, and retire the
    Dockerfile's independent download.
@@ -5157,17 +5162,29 @@ immutable release URL. Prefer authenticated, reproducible toolchain inputs.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Not applicable |
 | Owning codebase | `secp256k1-embedded` submodule |
-| Files and code regions | [ext_callbacks.c:1-2](../../f469-disco/usermods/secp256k1/mpy/config/ext_callbacks.c#L1-L2) ([L1](../../f469-disco/usermods/secp256k1/mpy/config/ext_callbacks.c#L1)); [libsecp256k1.c:23-24](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L23-L24) ([L23](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L23)); `secp256k1/src/util.h` (`checked_malloc`) |
-| Functions and modules | `secp256k1_default_illegal_callback_fn`, `secp256k1_default_error_callback_fn`, `checked_malloc` |
+| Files and code regions | [ext_callbacks.c:1-2](../../f469-disco/usermods/secp256k1/mpy/config/ext_callbacks.c#L1-L2) ([L1](../../f469-disco/usermods/secp256k1/mpy/config/ext_callbacks.c#L1)); [util.h:91-97](../../f469-disco/usermods/secp256k1/secp256k1/src/util.h#L91-L97) ([L91](../../f469-disco/usermods/secp256k1/secp256k1/src/util.h#L91)); [libsecp256k1.c:23-24](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L23-L24) ([L23](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L23)), [libsecp256k1.c:37](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L37), [libsecp256k1.c:713](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L713), [libsecp256k1.c:725](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L725), [libsecp256k1.c:1217-1219](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1217-L1219) ([L1217](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1217)) |
+| Functions and modules | Issue A: `secp256k1_default_illegal_callback_fn`, `secp256k1_default_error_callback_fn`, `checked_malloc`. Issue B: binding `ec_pubkey_combine`, `pedersen_blind_generator_blind_sum`, surjection-proof functions |
 
-- **Affected component:** Native secp256k1 MicroPython binding, library callback
-  configuration.
-- **Attacker capability:** None established. No hostile input reaches a returning
-  callback in this tree.
-- **Prerequisites:** A future reachable path must allocate through a
-  callback-reporting allocator and then misuse the failed result.
-- **Default reachability:** Not reachable. The surjection allocation is entered
-  only from binding paths whose Specter call sites are commented out.
+This finding holds two separate issues. **Issue A:** the library's callbacks
+return. **Issue B:** the binding's own allocations are not checked for `NULL`.
+Issue B never goes through a callback. The Status, Severity and reachability
+rating are pending the §15.1 decision.
+
+- **Affected component:** Native secp256k1 MicroPython binding and the library
+  callback configuration.
+- **Attacker capability:** None established. Issue B needs a heap-exhaustion
+  primitive, which this review did not find.
+- **Prerequisites:** Issue A needs a library allocation to fail, and the binding
+  never makes one (see Evidence). Issue B needs `gc_alloc` to return `NULL` on a
+  live path.
+- **Default reachability:** Issue A: not reachable in the binding. Issue B:
+  reachable. `pedersen_blind_generator_blind_sum` is called at
+  [liquid/manager.py:416](../../src/apps/wallets/liquid/manager.py#L416) when
+  `blinding_seed` is set. `ec_pubkey_combine` is called by embit's Liquid MuSig
+  blinding-key helper
+  ([liquid/descriptor.py:275](../../f469-disco/libs/common/embit/src/embit/liquid/descriptor.py#L275)).
+  The surjection-proof functions are unreachable, because their Specter call
+  sites are commented out.
 - **Impact on funds:** None established.
 - **Security property violated:** Cryptographic internal errors and allocation
   failures should terminate safely rather than return invalid state to native
@@ -5175,26 +5192,54 @@ immutable release URL. Prefer authenticated, reproducible toolchain inputs.
 
 **Evidence**
 
-Both callbacks are empty:
+*Issue A: returning callbacks.* Both callbacks are empty:
 
 ```c
 void secp256k1_default_illegal_callback_fn(const char* str, void* data){}
 void secp256k1_default_error_callback_fn(const char* str, void* data){}
 ```
 
-So `checked_malloc` can report out of memory to a callback that returns, and then
-hand `NULL` back to its caller. The bootloader's equivalent callbacks invoke
-`blsys_fatal_error`, so fail-closed handling is available in this project.
+So `checked_malloc`
+([util.h:91-97](../../f469-disco/usermods/secp256k1/secp256k1/src/util.h#L91-L97))
+can report out of memory to a callback that returns, and then hand `NULL` back
+to its caller. The bootloader's equivalent callbacks invoke `blsys_fatal_error`,
+so fail-closed handling is available in this project. `checked_malloc` calls
+libc `malloc`. In the library it is called only from context create and clone
+(secp256k1.c:183, 212) and scratch-space create (scratch_impl.h:15). The binding
+uses none of these: it builds its context with `context_preallocated_create` on
+a static buffer
+([libsecp256k1.c:37](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L37)).
+The illegal callback still fires on `ARG_CHECK` failures, but those calls also
+return an error code that the reviewed callers check.
 
-The concrete unchecked `gc_alloc` sinks exist only in the unreachable
-surjection-proof list branch (H-17, PATH-20). Application call sites for that
-branch are commented out
-([liquid/manager.py:446](../../src/apps/wallets/liquid/manager.py#L446)).
-This is integration debt, not a live vulnerability.
+*Issue B: unchecked binding allocations.* The binding redefines `malloc` as
+`gc_alloc(b, false)`
+([libsecp256k1.c:23-24](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L23-L24)).
+This macro applies only to the binding source, not to the library. `gc_alloc`
+returns `NULL` when the heap is exhausted, and no binding call site checks for
+it:
+
+- `ec_pubkey_combine`: two unchecked allocations
+  ([libsecp256k1.c:713](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L713),
+  [libsecp256k1.c:725](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L725)).
+- `pedersen_blind_generator_blind_sum`: three unchecked allocations
+  ([libsecp256k1.c:1217-1219](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1217-L1219)).
+  These are live at
+  [liquid/manager.py:416](../../src/apps/wallets/liquid/manager.py#L416).
+- Surjection-proof functions: unchecked allocations at 1300, 1376 and 1438.
+  They are unreachable (H-17, PATH-20), because the Specter call sites are
+  commented out
+  ([liquid/manager.py:446-459](../../src/apps/wallets/liquid/manager.py#L446-L459)).
+
+A failed allocation in Issue B makes the next write go through a `NULL`
+pointer. Routing the callbacks to a fail-closed handler (Issue A) does not
+fix Issue B.
 
 **Attack trace**
 
-None. No current input reaches a returning callback.
+None established. Issue A: no binding path reaches a library allocation.
+Issue B: an attacker would need to exhaust the heap right before one of the
+live allocations.
 
 **Why existing checks do not prevent it**
 
@@ -5204,15 +5249,15 @@ the reviewed callers raise.
 **Code at this tree**
 
 [ext_callbacks.c](../../f469-disco/usermods/secp256k1/mpy/config/ext_callbacks.c)
-is two empty function bodies. Not currently reachable: the surjection-proof list
-branches are the only unchecked `gc_alloc` sinks, and their Specter call sites
-are commented out at
-[liquid/manager.py:446](../../src/apps/wallets/liquid/manager.py#L446).
+is two empty function bodies (Issue A). The unchecked `gc_alloc` calls
+(Issue B) are listed under Evidence. Two of the three groups are live.
 
 **Recommended fix**
 
-Route both callbacks to a hard fault, a secure reset, or an equivalent
-fail-closed handler, and assert that they cannot return.
+Issue A: route both callbacks to a hard fault, a secure reset, or an equivalent
+fail-closed handler, and assert that they cannot return. Issue B: check every
+binding `malloc` for `NULL` and raise `MemoryError`, or use `m_malloc`, which
+raises on failure.
 
 **Action plan**
 
@@ -5238,6 +5283,23 @@ match what the bootloader already does with `blsys_fatal_error`:
 Verify the NLR jump is valid at every call site; if any callback can fire
 outside a MicroPython NLR context, use a hard reset there instead.
 
+For Issue B, in
+[libsecp256k1.c:23](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L23),
+make the binding's `malloc` raise instead of returning `NULL`. `m_malloc`
+raises `MemoryError` on failure
+([malloc.c:85-88](../../f469-disco/micropython/py/malloc.c#L85-L88)):
+
+```diff
+-#define malloc(b) gc_alloc((b), false)
++#define malloc(b) m_malloc(b)
+```
+
+`m_malloc` also allocates with `gc_alloc(b, false)`
+([malloc.c:58](../../f469-disco/micropython/py/malloc.c#L58)), so the existing
+`free` → `gc_free` mapping still matches. A raise partway through a function
+leaves earlier buffers unreferenced on the GC heap, and the next collection
+frees them.
+
 ---
 
 ### F-14: Entropy hardening gaps and unconfirmed raw-TRNG export
@@ -5254,7 +5316,7 @@ outside a MicroPython NLR context, use a hard reset there instead.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Export behavior is deterministic. Side-channel consequences are probabilistic and untested |
 | Owning codebase | This repository and its native crypto integration |
-| Files and code regions | [rng.py:7](../../src/rng.py#L7), [rng.py:96-116](../../src/rng.py#L96-L116) ([L96](../../src/rng.py#L96)); [getrandom.py:37](../../src/apps/getrandom.py#L37); [apps/__init__.py:1-11](../../src/apps/__init__.py#L1-L11) ([L1](../../src/apps/__init__.py#L1)); [libsecp256k1.c](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c) context initialization and Schnorr signing |
+| Files and code regions | [rng.py:7](../../src/rng.py#L7), [rng.py:96-116](../../src/rng.py#L96-L116) ([L96](../../src/rng.py#L96)); [getrandom.py:39-42](../../src/apps/getrandom.py#L39-L42) ([L39](../../src/apps/getrandom.py#L39)); [apps/__init__.py:1-11](../../src/apps/__init__.py#L1-L11) ([L1](../../src/apps/__init__.py#L1)); [libsecp256k1.c](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c) context initialization and Schnorr signing |
 | Functions and modules | `get_random_bytes`, the `getrandom` host command, secp256k1 context initialization and Schnorr signing |
 
 - **Affected component:** Entropy collection, randomness export, and signing
@@ -5299,8 +5361,13 @@ found.
 
 **Impact**
 
-A stuck or short-reading hardware RNG produces undetected zero-valued words.
-F-18 confirms the fail-open layer below this code. On a fresh device, output
+A hardware RNG timeout produces zero-valued words. `os.urandom` always returns
+the requested length
+([moduos.c:104-107](../../f469-disco/micropython/ports/stm32/moduos.c#L104-L107)),
+so there are no short reads. `_looks_dead` catches stalls
+([rng.py:89-91](../../src/rng.py#L89-L91), enforced at
+[rng.py:99-100](../../src/rng.py#L99-L100)), but not bias or seed and clock
+errors (F-18). F-18 confirms the fail-open layer below this code. On a fresh device, output
 becomes predictable only if the software pool has not already received
 attacker-unknown input such as touch timing and coordinates. A transient failure
 does not erase entropy already in the pool. Missing context randomization and
@@ -5320,7 +5387,7 @@ requests.
 
 **Code at this tree**
 
-- [getrandom.py:37](../../src/apps/getrandom.py#L37) returns up to 1000
+- [getrandom.py:39-42](../../src/apps/getrandom.py#L39-L42) returns up to 1000
   bytes to a host with no confirmation; `show_fn` is a parameter and is never
   called.
 - `getrandom` and `label` are in the production manifest
@@ -5336,7 +5403,7 @@ requests.
 **Recommended fix**
 
 Seed the pool from hardware at boot only after health and liveness checks. Route
-all sizes through the pool. Fail on short reads. Confirm host randomness exports
+all sizes through the pool. Confirm host randomness exports
 and show the requested byte count. Randomize the secp256k1 context. Consider
 auxiliary randomness for Schnorr signing.
 
@@ -5350,7 +5417,7 @@ auxiliary randomness for Schnorr signing.
     from errors import BaseError
     
    -entropy_pool = b"7" * 64
-   +entropy_pool = b"7" * 64  # replaced at boot
+   +entropy_pool = b"7" * 64  # mixed with TRNG at boot by seed_pool()
     
     ...
     def feed(data):
@@ -5383,7 +5450,7 @@ auxiliary randomness for Schnorr signing.
    +        if not await show_fn(Prompt("Send entropy to host?",
    +                "The host is requesting %d bytes of entropy from the device TRNG."
    +                % num_bytes)):
-   +            return
+   +            return False
             obj = {"title": "Here is your entropy", "note": "%d bytes" % num_bytes}
    ```
 4. Curate the production app list — drop `getrandom` unless it has a use case,
@@ -5407,7 +5474,7 @@ auxiliary randomness for Schnorr signing.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic |
 | Owning codebase | This repository |
-| Files and code regions | [qr.py:417-487](../../src/hosts/qr.py#L417-L487) ([L417](../../src/hosts/qr.py#L417)), [qr.py:489-561](../../src/hosts/qr.py#L489-L561) ([L489](../../src/hosts/qr.py#L489)), and the wallet-manager BCUR decode path |
+| Files and code regions | [qr.py:417-487](../../src/hosts/qr.py#L417-L487) ([L417](../../src/hosts/qr.py#L417)), [qr.py:489-561](../../src/hosts/qr.py#L489-L561) ([L489](../../src/hosts/qr.py#L489)); wallet-manager BCUR decode path [manager.py:226-237](../../src/apps/wallets/manager.py#L226-L237) ([L226](../../src/apps/wallets/manager.py#L226)); [bcur.py:44](../../f469-disco/libs/common/bcur.py#L44) |
 | Functions and modules | QR `parse_prefix`, legacy multipart reassembly, BCUR decode dispatch |
 
 - **Affected component:** Legacy animated QR and BCUR decoding.
@@ -5428,14 +5495,23 @@ auxiliary randomness for Schnorr signing.
   **last** slot. So `p0ofN` and `pNofN` alias each other.
 - `n == 0` gives `self.parts = []` and an `IndexError` **after**
   `self.animated = True` has already been set, which leaves the decoder in an
-  inconsistent state that a bare `except:` then swallows. The correct guard is
-  `if m < 1 or n < 1 or n < m`.
+  inconsistent state. In `process_normal` a bare `except:` swallows the error
+  and stores the frame as plain data
+  ([qr.py:518-524](../../src/hosts/qr.py#L518-L524)). `process_bcur` re-raises
+  it as `HostError`
+  ([qr.py:461-462](../../src/hosts/qr.py#L461-L462)), but `self.animated`
+  stays set. The correct guard is `if m < 1 or n < 1 or n < m`.
 - Legacy `pMofN` reassembly binds a session only by the part count `N`, so frames
   from two payloads with the same `N` can be mixed.
 - Numeric formatting of the part filename prevents path traversal. The outcome is
   malformed or misordered input, not code execution.
 - The BCUR path has stronger per-part checks, but the assembled shared hash is
   skipped rather than verified in the wallet-manager decode path.
+  [manager.py:226-237](../../src/apps/wallets/manager.py#L226-L237) ([L226](../../src/apps/wallets/manager.py#L226))
+  skips past the hash and calls `bcur_decode_stream(stream, f)` without
+  `checksum`. The default is `None`
+  ([bcur.py:44](../../f469-disco/libs/common/bcur.py#L44)), so no hash is
+  computed.
 
 The BCUR2/UR path is weaker still: neither of the format's two integrity
 mechanisms is enforced on the multi-part path. That is F-28.
@@ -5483,7 +5559,7 @@ fixes from F-28 at the same time.
 
 **Action plan**
 
-1. In [qr.py:557](../../src/hosts/qr.py#L557), correct the guard:
+1. In [qr.py:559](../../src/hosts/qr.py#L559), correct the guard:
 
    ```diff
             m = int(m)
@@ -5494,12 +5570,14 @@ fixes from F-28 at the same time.
             return m, n
    ```
 2. Set `self.animated = True` only after `self.parts` has been successfully
-   sized, so a raise cannot leave the decoder half-initialized for the bare
-   `except:` to swallow.
+   sized, in both `process_bcur` and `process_normal`, so a raise cannot leave
+   the decoder half-initialized. In `process_normal` the bare `except:` also
+   hides the raise.
 3. Bind frames to a session: hash the first frame's payload prefix and require
    every later frame to carry the same `(N, session_id)`, rather than only `N`.
 4. Verify the assembled BCUR shared hash in the wallet-manager decode path
-   before dispatch, and apply F-28's UR-level fixes at the same time.
+   ([manager.py:229-237](../../src/apps/wallets/manager.py#L229-L237): read
+   the hash instead of skipping it, and pass it as `checksum`) before dispatch, and apply F-28's UR-level fixes at the same time.
 5. Remove the `print(prefix)`.
 
 ---
@@ -5529,11 +5607,19 @@ fixes from F-28 at the same time.
   scriptPubKey, that is, a `tr(...)` taproot descriptor, which
   `LWalletManager.parse_wallet` accepts because it only rejects legacy
   descriptors.
-- **Default reachability:** Every address-verification comparison for a Liquid
-  taproot wallet.
-- **Impact on funds:** No direct loss. Address verification, itself a security
-  feature, silently compares against a wrong address, so a genuine address is
-  reported as not owned by the device.
+- **Default reachability:** Only the unconfidential half of address
+  verification for a Liquid taproot wallet. `find_wallet_from_address` checks
+  `addr in [a, unconf_a]`
+  ([liquid/manager.py:103](../../src/apps/wallets/liquid/manager.py#L103),
+  [liquid/manager.py:121](../../src/apps/wallets/liquid/manager.py#L121)). The
+  device-made confidential `a` still matches itself, but `unconf_a` is rebuilt
+  as `OP_0`. A blech32m-encoded v1 address from other software also fails,
+  because embit's blech32 implements only the blech32 constant
+  ([blech32.py:30-34](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L30-L34),
+  checksum `^ 1`).
+- **Impact on funds:** No direct loss. For the unconfidential form, address
+  verification, itself a security feature, silently compares against a wrong
+  address, so a genuine address is reported as not owned by the device.
 - **Security property violated:** Decoding an address must reconstruct the exact
   scriptPubKey it encodes.
 
@@ -5596,9 +5682,9 @@ silently.
 
 Use the decoded witness version to rebuild the script
 (`bytes([ver + 0x50 if ver else 0, len(prog)]) + prog`), and reject versions and
-program lengths outside the BIP-350 ranges. Fixing `blech32.decode` per F-35 is a
-prerequisite: without those checks `addr_decode` will also accept versions above
-16 and programs outside 2-40 bytes.
+program lengths outside the BIP-350 ranges. `_wit_script` below already
+rejects versions above 16 and programs outside 2-40 bytes, so the F-35
+`blech32.decode` fix is defense in depth here, not a prerequisite.
 
 **Action plan**
 
@@ -6275,7 +6361,7 @@ callers pass joined `bytes`, and the list-argument call sites are commented out.
 and the equivalent code at `:1376-1380` and `:1438-1442` add
 `i * element_size` to an already typed pointer. Not reachable — the
 list-argument call sites are commented out at
-[liquid/manager.py:446](../../src/apps/wallets/liquid/manager.py#L446).
+[liquid/manager.py:446-459](../../src/apps/wallets/liquid/manager.py#L446-L459).
 
 **Action.** Change `ptr + i * element_size` to `ptr + i`, check the `gc_alloc`
 result before use, and validate the argument is actually a list before casting
@@ -7532,7 +7618,7 @@ with equivalent dispatch at `:1334-1342`). Every in-tree caller
 passes joined `bytes`
 ([liquid/manager.py:425](../../src/apps/wallets/liquid/manager.py#L425)), and the
 three list-argument call sites are commented out
-([liquid/manager.py:446](../../src/apps/wallets/liquid/manager.py#L446)).
+([liquid/manager.py:446-459](../../src/apps/wallets/liquid/manager.py#L446-L459)).
 Why it holds: no PSET field is converted into a Python list of asset tags, so
 hostile Liquid data cannot select the defective branch.
 Residual risk: the functions stay exported. A future caller, or a re-enabled
@@ -8220,7 +8306,7 @@ prerequisite or coverage limit that static inspection did not settle.
     same pass.
 13. **Medium and Low.** Bound PSBT values (F-10, done in embit `ff98e0f`). Verify UR checksums and
     characters (F-28, H-08). Repair QR framing (F-16). Fail closed in crypto
-    callbacks (F-13). Harden entropy export (F-14). Fix truthiness, channel-IV,
+    callbacks and check binding allocations (F-13). Harden entropy export (F-14). Fix truthiness, channel-IV,
     backup-name, network-file, and assert-validation issues (H-06, H-10, H-11,
     H-12, H-13).
 14. **Secret and UI hardening.** Remove QR stdout leakage (H-18). Sanitize wallet
@@ -8298,7 +8384,8 @@ report:
    overwrite can be escalated beyond memory corruption.
 3. The actual STM32 option-byte state before and after a signature-rejected
    upgrade, plus power cuts at each version-record erase step (F-33, F-25).
-4. How the STM32 TRNG behaves in practice on stuck, repeated, or short reads. The
+4. How the STM32 TRNG behaves in practice on stuck output, repeated output, or
+   timeouts. The
    *handling* of those cases is settled by F-18: it is fail-open. Hardware testing
    must establish how often faults occur, and whether mnemonic generation can
    begin before the pool receives touch timing or coordinates unknown to an
@@ -8551,60 +8638,13 @@ Empty now
 ### 15.4 Low
 
 **F-09**
-- [ ] REF — table: `Dockerfile:11` → 12-15.
-- [ ] UNCLEAR — placeholders `<digest-source-url>`, `<immutable-release-url>`
-  and `<sha256>` remain. "ARM publishes SHA-256 for the 9-2020-q2 archives"
-  is not verified.
+- [ ] UNCLEAR — the action-plan placeholders `<digest-source>`,
+  `<immutable-release-url>` and `<sha256>` are still unfilled. This needs a
+  check against ARM's download page, or a local SHA-256 of an archive already
+  verified against the current MD5. The unverified claim that ARM publishes
+  SHA-256 is removed.
 
 **F-13**
-- [ ] WRONG — see §15.1. The unchecked `gc_alloc` calls are not confined to
-  the surjection branch.
-- [ ] INCONSISTENT — two issues are merged. The `malloc`→`gc_alloc` macro
-  (libsecp256k1.c:23-24) applies only to the binding. The library's
-  `checked_malloc` uses libc `malloc`, called only from
-  context_create/clone/scratch, while the binding uses
-  `context_preallocated_create` (libsecp256k1.c:37). The binding's unchecked
-  allocations never reach the callback. Split them.
-- [ ] REF — `liquid/manager.py:446` is a commented loader line. The surjection
-  calls are at 450-452. Cite 446-459.
-
-**F-14**
-- [ ] INCONSISTENT — Impact: "undetected zero-valued words" contradicts
-  `_looks_dead` (rng.py:89-91, 99-100), and `os.urandom` cannot short-read
-  (moduos.c:104-107). Say "zero words on timeout; `_looks_dead` catches
-  stalls, not bias or seed/clock errors (F-18)".
-- [ ] REF — `getrandom.py:37` is the `num_bytes < 0` check. The cap and
-  return are at 39-42 (two places).
-- [ ] UNCLEAR — drop "Fail on short reads". Diff comment
-  `# replaced at boot` → `# mixed with TRNG at boot by seed_pool()`. Use
-  `return False` on cancel.
-
-**F-16**
-- [ ] REF — step 1: the guard is at qr.py:559, not 557.
-- [ ] UNCLEAR — "a bare `except:` then swallows" is true only in
-  `process_normal` (qr.py:518-524). `process_bcur` re-raises as `HostError`
-  (qr.py:461-462).
-- [ ] UNCLEAR — "wallet-manager BCUR decode path" has no link. Cite
-  manager.py:226-237 (`bcur_decode_stream` called without `checksum`;
-  bcur.py:44).
-
-**F-36**
-- [ ] INCONSISTENT — the F-35 blech32 fix is called a "prerequisite", but
-  `_wit_script` already enforces 0-16 and 2-40. Call it defense in depth.
-- [ ] WRONG — "Every address-verification comparison" overstates it. The
-  device's confidential `a` matches itself, so only comparisons against the
-  unconfidential form (or a blech32m-encoded v1 address) fail. embit's
-  blech32 has no blech32m constant (blech32.py:30-34).
-
-### 15.5 Already correct
-
-Group checks passed without issues for everything not listed. Examples: the
-F-23 rewrite; the F-24 fee-check diff context; the F-30 diff contexts; the F-36
-reproduction output; F-35's reproduced collision and `lq16…` output; the F-08
-production key lists and thresholds; and all F-32 port line references.
-
-### 15.6 Done
-
-Re-verified against the tree on 2026-09-30 and removed: F-03, F-04, F-05,
-F-06, F-07, F-08, F-10, F-11, F-15, F-17, F-18, F-19, F-21, F-22, F-24, F-25,
-F-28, F-30, F-31, F-32, F-33, F-34, F-35.
+- [ ] Status, Severity and "Default reachability" rating: pending the §15.1
+  decision. The evidence is already split into Issue A (returning callbacks)
+  and Issue B (unchecked binding allocations, two groups live).
