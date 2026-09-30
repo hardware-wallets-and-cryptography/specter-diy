@@ -8589,7 +8589,7 @@ component is secure.
 
 ---
 
-## 15. Verification pass of §6 findings (2026-09-30)
+## 15. Verification pass of §6. Findings (2026-09-30)
 
 Every §6 finding was re-checked against the current tree: line references,
 quoted code, factual claims, status, internal consistency, and whether each
