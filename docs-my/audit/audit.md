@@ -235,7 +235,7 @@ Ordered by attacker gain, then by impact.
 6. **High: F-22 — a swapped smartcard can skip the PIN screen.** The device
    believes whatever PIN state the card reports. A card that answers "unlocked"
    means `Specter.unlock()` never asks for a PIN, so the anti-phishing words —
-   the only card-swap defense in the design — are never shown.
+   the only card-swap check shown at boot — are never shown.
 7. **High: F-06 — flash-backed PIN protection allows cheap offline
    verification.** After internal-flash readout, each PIN guess costs one
    HMAC-SHA256, and the resulting material unwraps the stored mnemonic.
@@ -1421,7 +1421,7 @@ either side. The message app accepts any derivation path with no allowlist.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic |
 | Owning codebase | This repository. The decode semantics come from upstream MicroPython, but relying on `.decode("ascii")` for validation is this project's choice |
-| Files and code regions | [signmessage.py:43-51](../../src/apps/signmessage/signmessage.py#L43-L51) ([L43](../../src/apps/signmessage/signmessage.py#L43)), [signmessage.py:54](../../src/apps/signmessage/signmessage.py#L54), [signmessage.py:83](../../src/apps/signmessage/signmessage.py#L83), [signmessage.py:99](../../src/apps/signmessage/signmessage.py#L99); [prompt.py:16-18](../../src/gui/screens/prompt.py#L16-L18) ([L16](../../src/gui/screens/prompt.py#L16)); [common.py:122-137](../../src/gui/common.py#L122-L137) ([L122](../../src/gui/common.py#L122)); [ram.py:83](../../src/keystore/ram.py#L83); `py/objstr.c:157,1881-1891` and `py/unicode.c:177-203` in the pinned `micropython` fork; `lv_label.c` in the pinned LVGL |
+| Files and code regions | [signmessage.py:43-52](../../src/apps/signmessage/signmessage.py#L43-L52) ([L43](../../src/apps/signmessage/signmessage.py#L43)), [signmessage.py:60-73](../../src/apps/signmessage/signmessage.py#L60-L73) ([L60](../../src/apps/signmessage/signmessage.py#L60)), [signmessage.py:85-90](../../src/apps/signmessage/signmessage.py#L85-L90) ([L85](../../src/apps/signmessage/signmessage.py#L85)), [signmessage.py:99](../../src/apps/signmessage/signmessage.py#L99); [prompt.py:16-18](../../src/gui/screens/prompt.py#L16-L18) ([L16](../../src/gui/screens/prompt.py#L16)); [common.py:122-137](../../src/gui/common.py#L122-L137) ([L122](../../src/gui/common.py#L122)); [ram.py:83](../../src/keystore/ram.py#L83); `py/objstr.c:157,1881-1891` and `py/unicode.c:177-203` in the pinned `micropython` fork; `lv_label.c` in the pinned LVGL |
 | Functions and modules | `MessageApp.process_host_command`, `MessageApp.sign_message`, `bytes_decode`, `utf8_check`, `lv_label_set_text` |
 
 - **Affected component:** The `message` app and the GUI text path.
@@ -1435,17 +1435,17 @@ either side. The message app accepts any derivation path with no allowlist.
 - **Security property violated:** The trusted display must show every byte a
   signing operation authorizes.
 
-**Evidence, in four steps**
+**Evidence, in four steps (code before the fix)**
 
-1. The app accepts arbitrary binary. `base64:` payloads are decoded with no
+1. The app accepted arbitrary binary. `base64:` payloads were decoded with no
    length cap and no byte-value restriction.
-2. The "ASCII" guard does not guard ASCII. MicroPython's `bytes.decode`
+2. The "ASCII" guard did not guard ASCII. MicroPython's `bytes.decode`
    **throws the encoding argument away** — `objstr.c:157` literally says
    `// TODO: validate 2nd/3rd args` — and substitutes utf-8. The only check that
-   runs is `utf8_check()`.
+   ran was `utf8_check()`.
 3. `utf8_check()` **accepts `0x00`**. `unicode.c:196` only rejects a `>= 0x80`
-   byte with no lead byte. So a message with an embedded NUL decodes fine and the
-   hex-fallback branch never runs.
+   byte with no lead byte. So a message with an embedded NUL decoded fine and the
+   hex-fallback branch never ran.
 4. The resulting string goes to `lv.label.set_text()`, which takes a
    `const char *` and measures it with `strlen`. **Everything after the first NUL
    is not drawn.** `sign_message()` then hashes the full byte string.
@@ -1476,11 +1476,13 @@ device signs:   dSHA256("\x18Bitcoin Signed Message:\n" || compact(len) || paylo
 
 `signmessage` accepts any BIP-32 path, hardened or not, on any coin type, with
 no allowlist and no depth limit
-([signmessage.py:43-51](../../src/apps/signmessage/signmessage.py#L43-L51) ([L43](../../src/apps/signmessage/signmessage.py#L43))). A
+([signmessage.py:43-52](../../src/apps/signmessage/signmessage.py#L43-L52) ([L43](../../src/apps/signmessage/signmessage.py#L43))). A
 supplied fingerprint prefix is checked against the device, but nothing bounds the
-path. The returned signature is **recoverable**
-([ram.py:83](../../src/keystore/ram.py#L83) `sign_recoverable`, returning
-`base64(flag || compact_sig)`), so the host can recover the **public key at the
+path. The returned signature is **recoverable**:
+[ram.py:83-88](../../src/keystore/ram.py#L83-L88) `sign_recoverable` returns
+`(sig, flag)`, and
+[signmessage.py:106-110](../../src/apps/signmessage/signmessage.py#L106-L110)
+serializes it as `base64(flag || compact_sig)`. So the host can recover the **public key at the
 requested path** from it. One confirmation therefore leaks the pubkey at any path
 the attacker names, which is a wallet-structure and address-clustering oracle
 outside the xpub-export flow of F-05. The path *is* displayed in the prompt
@@ -1488,15 +1490,17 @@ title, so this is bounded by user attention rather than by code.
 
 The address shown alongside is derived from `derivation_path[0]` only. `84h`
 gives p2wpkh, `49h` gives p2sh-p2wpkh, and everything else falls through to
-p2pkh ([signmessage.py:83](../../src/apps/signmessage/signmessage.py#L83)).
+p2pkh ([signmessage.py:85-90](../../src/apps/signmessage/signmessage.py#L85-L90) ([L85](../../src/apps/signmessage/signmessage.py#L85))).
 For `m/86h` (Taproot) the device displays a **legacy p2pkh address** that has
 nothing to do with the key's real usage.
 
-**Why existing checks do not prevent it**
+**Why existing checks did not prevent it**
 
-The only content check is a decode that does not check what its own argument
-says it checks. There is no length cap, no control-character filter, and no NUL
-rejection anywhere on this path.
+Before the fix, the only content check was a decode that did not check what its
+own argument said it checked. There was no length cap, no control-character
+filter, and no NUL rejection anywhere on this path. The current code has all
+three
+([signmessage.py:63-73](../../src/apps/signmessage/signmessage.py#L63-L73) ([L63](../../src/apps/signmessage/signmessage.py#L63))).
 
 **Code at this tree**
 
@@ -1504,11 +1508,11 @@ The byte validation at
 [signmessage.py:60](../../src/apps/signmessage/signmessage.py#L60) replaced the
 `.decode("ascii")` guard (see **Resolution**). The derivation
 path is unbounded
-([signmessage.py:43-51](../../src/apps/signmessage/signmessage.py#L43-L51) ([L43](../../src/apps/signmessage/signmessage.py#L43))), the
+([signmessage.py:43-52](../../src/apps/signmessage/signmessage.py#L43-L52) ([L43](../../src/apps/signmessage/signmessage.py#L43))), the
 signature is recoverable
 ([ram.py:83-88](../../src/keystore/ram.py#L83-L88) ([L83](../../src/keystore/ram.py#L83))), and the address mapping
 falls through to p2pkh for `m/86h`
-([signmessage.py:83](../../src/apps/signmessage/signmessage.py#L83)).
+([signmessage.py:85-90](../../src/apps/signmessage/signmessage.py#L85-L90) ([L85](../../src/apps/signmessage/signmessage.py#L85))).
 
 **Recommended fix**
 
@@ -1520,7 +1524,7 @@ address-type mapping, or omit the address.
 
 **Action plan**
 
-1. In [signmessage.py:60-73](../../src/apps/signmessage/signmessage.py#L60-L73) ([L60](../../src/apps/signmessage/signmessage.py#L60)), validate bytes explicitly instead of relying on `.decode("ascii")`:
+1. In [signmessage.py:60-73](../../src/apps/signmessage/signmessage.py#L60-L73) ([L60](../../src/apps/signmessage/signmessage.py#L60)), validate bytes explicitly instead of relying on `.decode("ascii")` (applied):
 
    ```diff
             else:
@@ -1556,14 +1560,14 @@ address-type mapping, or omit the address.
 
 **Regression test**
 
-[test_message_with_embedded_nul_must_not_display_as_readable_text:98](../../test/tests_native/test_message_signing_display.py#L98),
-red today: a NUL-containing message is decoded and shown as readable text
-instead of falling back to a hex dump, so the hidden tail after the NUL
-reaches the prompt. Partial coverage only — this suite runs under CPython,
-not the pinned MicroPython fork, so it cannot reproduce `objstr.c`'s
-`.decode()` ignoring its encoding argument or `lv_label.c`'s on-device
-`strlen()` truncation; see the test's docstring for what is and isn't
-covered. Now green.
+[test_message_with_embedded_nul_must_not_display_as_readable_text:98](../../test/tests_native/test_message_signing_display.py#L98).
+Was red before the fix; green now. Before the fix, a NUL-containing message was
+decoded and shown as readable text instead of falling back to a hex dump, so
+the hidden tail after the NUL reached the prompt. Partial coverage only — this
+suite runs under CPython, not the pinned MicroPython fork, so it cannot
+reproduce `objstr.c`'s `.decode()` ignoring its encoding argument or
+`lv_label.c`'s on-device `strlen()` truncation; see the test's docstring for
+what is and isn't covered.
 
 **Resolution**
 
@@ -1573,8 +1577,10 @@ a 512-byte length cap, then a printable-range check (`0x20-0x7E` or `\n`)
 gating the pretty-printed branch, anything else falls to the hex dump. Closes
 the NUL-truncation defect the regression test targets, and — because any
 multi-byte UTF-8 sequence contains a byte `>= 0x80`, outside the printable
-range — also closes the U+202E/homoglyph variant described in the same
-finding, without a MicroPython-specific test for it.
+range — also closes the U+202E variant and the non-ASCII homoglyph variant
+described in the same finding, without a MicroPython-specific test for it.
+ASCII look-alikes (`l`/`1`, `O`/`0`) are printable and still pass; the
+homoglyph variant is closed only for non-ASCII characters.
 
 **Correction to the action plan:** its own text claims item 1 "closes... the
 forged `__________` separator in one change." That is not the case — `_` is
@@ -1608,7 +1614,7 @@ untouched. This sub-issue is still open.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic |
 | Owning codebase | This repository |
-| Files and code regions | [secureapplet.py:48-80](../../src/keystore/javacard/applets/secureapplet.py#L48-L80) ([L48](../../src/keystore/javacard/applets/secureapplet.py#L48)), [secureapplet.py:105-119](../../src/keystore/javacard/applets/secureapplet.py#L105-L119) ([L105](../../src/keystore/javacard/applets/secureapplet.py#L105)); [memorycard.py:88](../../src/keystore/memorycard.py#L88); [ram.py:267](../../src/keystore/ram.py#L267); [specter.py:564-574](../../src/specter.py#L564-L574) ([L564](../../src/specter.py#L564)) |
+| Files and code regions | [secureapplet.py:48-80](../../src/keystore/javacard/applets/secureapplet.py#L48-L80) ([L48](../../src/keystore/javacard/applets/secureapplet.py#L48)), [secureapplet.py:105-119](../../src/keystore/javacard/applets/secureapplet.py#L105-L119) ([L105](../../src/keystore/javacard/applets/secureapplet.py#L105)); [memorycard.py:88-102](../../src/keystore/memorycard.py#L88-L102) ([L88](../../src/keystore/memorycard.py#L88)), [memorycard.py:130](../../src/keystore/memorycard.py#L130), [memorycard.py:438](../../src/keystore/memorycard.py#L438); [ram.py:289-300](../../src/keystore/ram.py#L289-L300) ([L289](../../src/keystore/ram.py#L289)); [specter.py:199](../../src/specter.py#L199), [specter.py:564-574](../../src/specter.py#L564-L574) ([L564](../../src/specter.py#L564)) |
 | Functions and modules | `SecureApplet.get_pin_status`, `SecureApplet.unlock`, `MemoryCard.is_locked`, `RAMKeyStore.unlock` |
 
 - **Affected component:** `MemoryCard` keystore and `SecureApplet`.
@@ -1617,16 +1623,17 @@ untouched. This sub-issue is still open.
   keystore is selected.
 - **Default reachability:** Applies whenever card-reported state controls
   smartcard unlock.
-- **Impact on funds:** The device can be made to boot with no PIN prompt and to
-  load an attacker-chosen seed. Funds later sent to addresses it generates go to
-  the attacker.
+- **Impact on funds:** The device can be made to boot with no PIN prompt and
+  without the anti-phishing words. Loading an attacker-chosen seed takes extra
+  user steps (see consequence 5). If the user takes them, funds later sent to
+  addresses the device generates go to the attacker.
 - **Security property violated:** PIN enforcement and card identity must not
   rest only on assertions made by the untrusted card.
 
 **Evidence**
 
 Every PIN-policy decision is a byte the card sent. There is no attestation of
-that state and no device-side counter to cross-check it.
+that state, and `MemoryCard` keeps no device-side counter to cross-check it.
 
 ```python
 # secureapplet.py
@@ -1653,7 +1660,11 @@ Consequences:
    main menu with no PIN prompt.** `SecureApplet.unlock()` short-circuits the
    same way.
 2. Because no PIN screen is drawn, the anti-phishing words are never shown.
-   Those words are the only card-swap defense in the design.
+   Those words are the only card-swap check shown at boot. The card
+   fingerprint (`hexid`,
+   [memorycard.py:357](../../src/keystore/memorycard.py#L357)) appears only in
+   the smartcard storage menu and card info, and nothing compares it to a
+   stored value.
 3. A card reporting `pin_attempts_left == pin_attempts_max` suppresses the "You
    only have N of M attempts" warning at
    [ram.py:278](../../src/keystore/ram.py#L278).
@@ -1661,22 +1672,38 @@ Consequences:
    blob. The "plaintext" format uses the public constant `b"\xcc" * 32`, so the
    attacker does not even need the device's own secret to build a blob the device
    accepts.
+5. Skipping the PIN loop does not by itself load that blob. `_is_key_saved` is
+   set only by `check_saved()`, which runs in `_unlock`
+   ([memorycard.py:130](../../src/keystore/memorycard.py#L130)), or by
+   `get_secret_info()`
+   ([memorycard.py:438](../../src/keystore/memorycard.py#L438)). A card that
+   reports `PIN_UNLOCKED` never reaches `_unlock`, so the init-menu "Load key
+   from smartcard" button stays hidden
+   ([specter.py:199](../../src/specter.py#L199)). To load the blob, the user
+   must first load or enter some key, then open Settings → "Smartcard storage".
+   "Get card info" or "Save key to the card" calls `get_secret_info()`, and that
+   enables "Load key from the card".
+6. The alternative path is an emulator that reports `PIN_LOCKED` and accepts
+   any PIN. The PIN screen then appears, but the anti-phishing words differ,
+   because they are keyed on `card_pubkey`
+   ([memorycard.py:81](../../src/keystore/memorycard.py#L81)).
 
 **Attack trace**
 
 Emulate a card that returns `PIN_UNLOCKED`, skip the PIN loop, and serve the
-constant-key attacker seed described in F-07.
+constant-key attacker seed described in F-07. The seed loads only if the user
+takes the storage-menu path in consequence 5.
 
 **Why existing checks do not prevent it**
 
 The device has no independent PIN-state or card-identity check before it decides
-whether to prompt. The residual mitigation is that loading the key from the card
-is still a manual menu action ("Load key from smartcard"). That is a UI step, not
-a cryptographic control.
+whether to prompt. The residual mitigations are UI steps, not cryptographic
+controls. The init-menu load button stays hidden, and loading the card key needs
+a manual action in the storage menu.
 
 **Code at this tree**
 
-[secureapplet.py:48-51](../../src/keystore/javacard/applets/secureapplet.py#L48-L51) ([L48](../../src/keystore/javacard/applets/secureapplet.py#L48))
+[secureapplet.py:48-53](../../src/keystore/javacard/applets/secureapplet.py#L48-L53) ([L48](../../src/keystore/javacard/applets/secureapplet.py#L48))
 takes the whole PIN policy from a card response:
 
 ```python
@@ -1690,8 +1717,11 @@ derives `is_locked` from `self._pin_status`,
 [secureapplet.py:105-106](../../src/keystore/javacard/applets/secureapplet.py#L105-L106) ([L105](../../src/keystore/javacard/applets/secureapplet.py#L105))
 short-circuits `unlock()` on it, and
 [memorycard.py:101-102](../../src/keystore/memorycard.py#L101-L102) ([L101](../../src/keystore/memorycard.py#L101)) forwards it
-straight through into `RAMKeyStore.unlock`'s `while self.is_locked` loop. No
-device-side PIN-attempt counter exists anywhere in `src/keystore/`.
+straight through into `RAMKeyStore.unlock`'s `while self.is_locked` loop.
+`MemoryCard` keeps no device-side PIN-attempt counter. `FlashKeyStore` has one
+([flash.py:43-44](../../src/keystore/flash.py#L43-L44),
+[flash.py:117-118](../../src/keystore/flash.py#L117-L118)), but the smartcard
+path does not use it.
 
 **Recommended fix**
 
@@ -1730,7 +1760,7 @@ not previously paired.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic |
 | Owning codebase | The unvalidated call site in this repository, `secp256k1-embedded` submodule |
-| Files and code regions | [libsecp256k1.c:1818-1844](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1818-L1844) ([L1818](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1818)); [liquid/wallet.py:54](../../src/apps/wallets/liquid/wallet.py#L54); [liquid/manager.py:311-333](../../src/apps/wallets/liquid/manager.py#L311-L333) ([L311](../../src/apps/wallets/liquid/manager.py#L311)), [liquid/manager.py:489-495](../../src/apps/wallets/liquid/manager.py#L489-L495) ([L489](../../src/apps/wallets/liquid/manager.py#L489)); [stream.c:59-68](../../f469-disco/micropython/py/stream.c#L59-L68) ([L59](../../f469-disco/micropython/py/stream.c#L59)); [platform.py:148-154](../../src/platform.py#L148-L154) ([L148](../../src/platform.py#L148)); [sdram.c:10-11](../../f469-disco/usermods/sdram/sdram.c#L10-L11) ([L10](../../f469-disco/usermods/sdram/sdram.c#L10)) |
+| Files and code regions | [libsecp256k1.c:1818-1844](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1818-L1844) ([L1818](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1818)); [liquid/wallet.py:54](../../src/apps/wallets/liquid/wallet.py#L54); [liquid/manager.py:311-333](../../src/apps/wallets/liquid/manager.py#L311-L333) ([L311](../../src/apps/wallets/liquid/manager.py#L311)), [liquid/manager.py:486-531](../../src/apps/wallets/liquid/manager.py#L486-L531) ([L486](../../src/apps/wallets/liquid/manager.py#L486)), output `fill_scope` calls at [L517](../../src/apps/wallets/liquid/manager.py#L517) and [L527](../../src/apps/wallets/liquid/manager.py#L527); [stream.c:59-68](../../f469-disco/micropython/py/stream.c#L59-L68) ([L59](../../f469-disco/micropython/py/stream.c#L59)); [platform.py:148-154](../../src/platform.py#L148-L154) ([L148](../../src/platform.py#L148)); [sdram.c:10-11](../../f469-disco/usermods/sdram/sdram.c#L10-L11) ([L10](../../f469-disco/usermods/sdram/sdram.c#L10)) |
 | Functions and modules | `usecp256k1_rangeproof_rewind_from`, `LWallet.fill_pset_scope`, `LiquidWalletManager.preprocess_psbt`, `mp_stream_rw` |
 
 - **Affected component:** Native secp256k1 MicroPython binding, streaming
@@ -1771,6 +1801,16 @@ comparison passes for a five-byte proof, because `memoff` is only eight; it does
 not bound the write loop. EOF also does not stop the loop, because `mp_stream_rw`
 returns a short read with `errcode = 0`.
 
+- **`prooflen` 1..63:** the bound is not a multiple of 64, so `l` steps from
+  `0xFFFFFFC0` and wraps to 0, always below the bound. The loop never ends. It
+  streams attacker bytes upward from the arena start until the stream is
+  exhausted, then spins on zero-length reads forever. The device hangs.
+- **`prooflen` 0:** the bound `0xFFFFFFC0` is a multiple of 64, so the loop
+  ends at `l = 0xFFFFFFC0`. The trailing read
+  ([libsecp256k1.c:1840](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1840))
+  then asks for `prooflen - l = 64` bytes at `memptr + 0xFFFFFFC0`, which wraps
+  to `memptr - 64`. That writes 64 bytes *below* the arena.
+
 The destination is fixed and known. `platform.get_preallocated_ram()` returns
 the SDRAM arena at `0xC02EE000` with size `0x100000`.
 `LWallet.fill_pset_scope` reads the CompactSize rangeproof length straight from
@@ -1783,7 +1823,8 @@ metadata is being built.
 Put a five-byte rangeproof value in an attributed Liquid input or output scope.
 Omit the cleartext fields that bypass rewind. Append chosen bytes. Execution
 reaches `rangeproof_rewind_from(stream, 5, 0xC02EE000, 0x100000, ...)`, `5 - 64`
-wraps, and the trailing bytes are streamed past the arena.
+wraps, and the trailing bytes are streamed past the arena. The loop then never
+ends.
 
 **Impact constraint**
 
@@ -1832,7 +1873,7 @@ length in `fill_pset_scope`.
 
 **Action plan**
 
-1. Native, in `usecp256k1_rangeproof_rewind_from` ([libsecp256k1.c:1826-1839](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1826-L1839) ([L1826](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1826))):
+1. Native, in `usecp256k1_rangeproof_rewind_from` ([libsecp256k1.c:1826-1844](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1826-L1844) ([L1826](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1826))):
 
    ```diff
         size_t l = 0;
@@ -1848,18 +1889,26 @@ length in `fill_pset_scope`.
    -    while(l < (prooflen - 64)){
    -        mp_stream_read_exactly(stream, (byte*)(memptr+l), 64, &err);
    -        if(err){
+   +    size_t got = 0;
    +    while(l + 64 <= prooflen){                     /* addition-based, no underflow */
-   +        size_t got = mp_stream_read_exactly(stream, (byte*)(memptr+l), 64, &err);
+   +        got = mp_stream_read_exactly(stream, (byte*)(memptr+l), 64, &err);
    +        if(err || got != 64){
                 mp_raise_ValueError("Failed to read from stream");
                 return mp_const_none;
             }
             l += 64;
         }
+   -    mp_stream_read_exactly(stream, (byte*)(memptr+l), (prooflen-l), &err);
+   -    if(err){
+   +    got = mp_stream_read_exactly(stream, (byte*)(memptr+l), (prooflen-l), &err);
+   +    if(err || got != prooflen - l){
+            mp_raise_ValueError("Failed to read from stream");
+            return mp_const_none;
+        }
    ```
 
-   Treat a short read as failure regardless of `errcode` — `mp_stream_rw`
-   reports EOF with `errcode == 0`
+   Treat a short read as failure regardless of `errcode`, in the loop and in
+   the trailing read — `mp_stream_rw` reports EOF with `errcode == 0`
    ([stream.c:59-68](../../f469-disco/micropython/py/stream.c#L59-L68) ([L59](../../f469-disco/micropython/py/stream.c#L59))).
 2. Python, in `LWallet.fill_pset_scope` ([liquid/wallet.py:65-67](../../src/apps/wallets/liquid/wallet.py#L65-L67) ([L65](../../src/apps/wallets/liquid/wallet.py#L65))), validate before crossing the boundary:
 
@@ -1867,11 +1916,20 @@ length in `fill_pset_scope`.
             stream.seek(rangeproof_offset)
             l = compact.read_from(stream)
    +        if l < 65 or l > memlen:
-   +            raise RewindError("Invalid rangeproof length %d" % l)
+   +            raise WalletError("Invalid rangeproof length %d" % l)
             vout = scope.utxo if isinstance(scope, LInputScope) else scope.blinded_vout
    ```
-3. Fix the ABI mismatch in the same module **first** — see H-16 — or the arena
-   bound the native check relies on is itself garbage.
+
+   Raise `WalletError`, not `RewindError`. `fill_scope` catches `RewindError`
+   and returns False
+   ([liquid/wallet.py:46-48](../../src/apps/wallets/liquid/wallet.py#L46-L48) ([L46](../../src/apps/wallets/liquid/wallet.py#L46))),
+   so a malformed proof would silently mark the scope as not owned. No `try`
+   wraps the `fill_scope` calls in `preprocess_psbt`, so `WalletError` aborts
+   the PSET.
+3. Fix H-16 in the same change; the two are independent. The native bound in
+   step 1 uses the binding's own `memlen`
+   ([libsecp256k1.c:1822](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1822)),
+   not the ABI-mismatched `allocated_len` that H-16 describes.
 
 **Regression test**
 
@@ -2033,9 +2091,9 @@ to secure a port-owned USB device.
     
     # inject version and i2c to platform module
    ```
-2. In [boot.py:18-23](../../boot/main/boot.py#L18-L23) ([L18](../../boot/main/boot.py#L18)), wrap the fallible
-   peripheral setup (I2C, ExtInt) so a raise cannot leave the device in a
-   less-secure state than it started:
+2. In [boot.py:18-50](../../boot/main/boot.py#L18-L50) ([L18](../../boot/main/boot.py#L18)), wrap the fallible
+   peripheral setup (I2C, ExtInt) so a raise cannot skip the rest of
+   `boot.py`, and guard `poweroff()` against `i2c = None`:
 
    ```diff
     # get i2c
@@ -2054,7 +2112,26 @@ to secure a port-owned USB device.
    +    i2c = None          # continue with USB already off
     
     leds = [pyb.LED(i) for i in range(1,5)]
+    ...
+            # stop battery manangement
+   -        if 112 in i2c.scan():
+   +        if i2c is not None and 112 in i2c.scan():
+                i2c.mem_write(0, 112, 0)
+    ...
+   -pyb.ExtInt(pyb.Pin('B1'), pyb.ExtInt.IRQ_FALLING, pyb.Pin.PULL_NONE, pwrcb)
+   +try:
+   +    pyb.ExtInt(pyb.Pin('B1'), pyb.ExtInt.IRQ_FALLING, pyb.Pin.PULL_NONE, pwrcb)
+   +except Exception:
+   +    pass                # power button inactive; boot continues
    ```
+
+   Without the `poweroff()` guard, `i2c.scan()` at
+   [boot.py:37](../../boot/main/boot.py#L37) raises inside the `try`. The
+   `finally` still cuts power, but `os.sync()` is skipped. `platform.i2c = None`
+   ([boot.py:64](../../boot/main/boot.py#L64)) is safe: `get_battery_status`
+   already returns `(None, None)` for it
+   ([platform.py:293-295](../../src/platform.py#L293-L295)), as on the
+   simulator.
 3. Make `platform.enable_usb` clear both dupterm slots itself, so no caller can
    enable USB and leave the REPL attached.
 4. Longer term: patch the fork so `flash_error()` halts instead of returning for
@@ -5715,8 +5792,10 @@ defines `intptr_t allocated_len`. Separate translation units, so no diagnostic.
 **Action.** Use one type (`size_t`) in both, `#include` the public declaration
 in the translation unit that compiles the definition so the compiler can
 diagnose future drift, and restore warnings-as-errors for this user module. Fix
-this **before** F-31, since F-31's proposed arena bound relies on this parameter
-being read correctly.
+this in the same change as F-31; the two are independent. F-31's proposed bound
+uses the binding's own `memlen`
+([libsecp256k1.c:1822](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1822)),
+not `allocated_len`.
 
 ### H-17: Unreachable surjection-proof copy loops scale their index twice
 
@@ -7983,109 +8062,28 @@ misleading or incomplete. **REF** — a wrong line reference.
   skipped. The alternative attack path: the emulator reports LOCKED and
   accepts any PIN, but then the words differ, because they are keyed on
   `card_pubkey` (memorycard.py:81). Decide whether High still holds.
+
 - [ ] **F-13 severity and reachability (Low, "Not reachable").**
   `pedersen_blind_generator_blind_sum` makes three unchecked `malloc`→`gc_alloc`
   calls (libsecp256k1.c:1217-1219) and is live at liquid/manager.py:416 when
   `blinding_seed` is set. `ec_pubkey_combine` is also unchecked
   (libsecp256k1.c:713, 725). Decide the new rating.
+
 - [ ] **F-03 status "Resolved (core defect)".** `metainp["warning"]` is written
   (manager.py:896), but nothing in `src/` reads or renders it. Proposed status:
   "Partially remediated: flagged in `meta`, not displayed."
+
 - [ ] **F-21 status "Resolved".** The §2 summary table lists F-21 as
   Confirmed. Proposed status: "Partially resolved". The forged separator, the
   unbounded path, and the `m/86h` address mapping are still open.
+
 - [ ] **F-10 status "Plausible".** The fix is in the pinned embit (`b2e606b`
   includes `ff98e0f`; psbt.py:334-345). Proposed status: "Resolved (embit
   `ff98e0f`)".
 
 ### 15.2 High
 
-**F-04**
-- [x] STALE — Evidence: the quoted derived-key loop "has no equivalent test",
-  but psbtview.py:926-933 now has the `der_sec`/`der_pkh` check. Prefix with
-  "Before the fix, …".
-- [x] UNCLEAR — rename the heading "Code changes at this tree" to "Code at this
-  tree", and state that the fix is present at psbtview.py:926-933 while the
-  x-only comparison is still at :883.
-- [x] REF — action plan step 3: `manager.py:1024` is `for w in wallets:`.
-  `keystore.sign_input` is at :1031.
-- [x] REF — table: `manager.py:1030` → 1031.
-- [x] STALE — the step 1 diff is applied (with different variable names). Mark
-  it "(applied, see Remediation)".
-- [x] Outside the audit: the test docstring at test_signing_authorization.py:83-87
-  still says "It fails today".
-
-**F-06**
-- [x] BREAKS — step 1: "Use it for both `self.pin` (verifier) and
-  `self.pin_secret`" makes the verifier stored in `/flash/keystore/pin` equal
-  to the key that unwraps `enc_secret`, so a flash read yields the key with no
-  brute force. Replace with: compute `k = self._pin_kdf(pin)` once, then
-  `self.pin = tagged_hash("pin-verify", k)` and
-  `self.pin_secret = tagged_hash("pin-secret", k)`.
-- [x] WRONG — PBKDF2 is called "memory-hard". It is CPU-hard only.
-- [x] INCONSISTENT — "stored per-device salt", but the diff derives the salt
-  from `self.secret` and stores nothing. Say "derived from the device secret".
-
-**F-17**
-- [x] BREAKS — step 1: `"\x1eSpecter Firmware Authorization:\n"` is 32 bytes,
-  so the length byte must be `\x20`.
-- [x] BREAKS — step 2: the regex `^b\d+\.\d+\.\d+` misses main-firmware-only
-  messages, whose hrp is `0.0.0rc1-` because the brief name for `main` is `""`
-  (bootloader-spec.md:189). Match the full hrp instead:
-  `^(b\d+\.\d+\.\d+(rc\d+)?-)?(\d+\.\d+\.\d+(rc\d+)?-)?1[a-z0-9]{58}$`
-  (both parts optional, so boot-only upgrades are also caught).
-- [x] REF — table: `bl_signature.c:146-158` → 141-173 (verify call at :172);
-  `signmessage.py:99` → 99-110.
-- [x] UNCLEAR — the 252-byte cap is in `verify_signature`
-  (bl_signature.c:142), not in `blsect_make_signature_message`.
-
-**F-21**
-- [ ] INCONSISTENT — Regression test: "red today … Now green". The test passes.
-  Say "Was red before the fix; green now."
-- [ ] STALE — Evidence steps 1 and 3 and "Why existing checks…" describe
-  pre-fix code as current ("no length cap", "hex-fallback never runs", "no NUL
-  rejection anywhere"). Current: signmessage.py:63-73. Put them in the past
-  tense.
-- [ ] REF — `signmessage.py:83` is `get_xpub`. The address mapping is at 85-90
-  (three places).
-- [ ] REF — `signmessage.py:54` is stale. Use 60-73. Path handling: 43-51 → 43-52.
-- [ ] WRONG — `base64(flag || compact_sig)` is built in signmessage.py:106-110.
-  ram.py:83-88 returns `(sig, flag)`.
-- [ ] UNCLEAR — mark the action plan step 1 diff "(applied)".
-- [ ] UNCLEAR — Resolution: the homoglyph variant is closed only for non-ASCII
-  characters. ASCII look-alikes (`l`/`1`, `O`/`0`) still pass.
-
-**F-22**
-- [ ] WRONG — see §15.1 for the no-PIN + load chain.
-- [ ] WRONG — "No device-side PIN-attempt counter exists anywhere in
-  `src/keystore/`" is false: `FlashKeyStore` has one (flash.py:43-44, 117-118).
-  Say "`MemoryCard` keeps no device-side counter."
-- [ ] REF — table: `ram.py:267` is `init`, `unlock` is 289-300;
-  `memorycard.py:88` → 88-102; `get_pin_status` is at secureapplet.py:48-53.
-- [ ] UNCLEAR — "the only card-swap defense": the card fingerprint (`hexid`,
-  memorycard.py:357) is also shown in menus. Say "the only card-swap check
-  shown at boot".
-
-**F-31**
-- [ ] WRONG — action plan step 3: the native bound uses the binding's own
-  `memlen` (libsecp256k1.c:1822), not the ABI-mismatched `allocated_len`, so
-  there is no dependency on H-16. Say "Fix H-16 in the same change; the two
-  are independent." Also fix the matching sentence in H-16.
-- [ ] UNCLEAR — Evidence: for `prooflen` 1..63 the counter wraps and the loop
-  never ends (it hangs after EOF). For `prooflen` 0 the trailing read writes
-  64 bytes *below* the arena.
-- [ ] UNCLEAR — native diff: the trailing `mp_stream_read_exactly`
-  (libsecp256k1.c:1840-1844) still ignores short reads. Add a check there.
-- [ ] UNCLEAR — Python diff: `RewindError` is caught by `fill_scope`, which
-  returns False (wallet.py:46-48), so the input is silently treated as not
-  owned. Raise `WalletError` to abort instead.
-- [ ] REF — table: `liquid/manager.py:489-495` → 486-531 (output calls at
-  517, 527).
-
-**F-32**
-- [ ] INCONSISTENT — step 2 text says to wrap "I2C, ExtInt", but the diff wraps
-  only I2C. With `i2c = None`, `poweroff()` (boot.py:37) raises inside its
-  `try`, and `platform.i2c = None` (boot.py:64) may break later battery code.
+Empty now
 
 ### 15.3 Medium
 
@@ -8307,3 +8305,92 @@ production key lists and thresholds; and all F-32 port line references.
 - [x] UNCLEAR — "Still open": `fee_verified` is never set anywhere. What is
   recorded but not rendered is `metainp["warning"]`.
 - [x] UNCLEAR — the Owning codebase table row is missing its trailing `|`.
+
+**F-04**
+- [x] STALE — Evidence: the quoted derived-key loop "has no equivalent test",
+  but psbtview.py:926-933 now has the `der_sec`/`der_pkh` check. Prefix with
+  "Before the fix, …".
+- [x] UNCLEAR — rename the heading "Code changes at this tree" to "Code at this
+  tree", and state that the fix is present at psbtview.py:926-933 while the
+  x-only comparison is still at :883.
+- [x] REF — action plan step 3: `manager.py:1024` is `for w in wallets:`.
+  `keystore.sign_input` is at :1031.
+- [x] REF — table: `manager.py:1030` → 1031.
+- [x] STALE — the step 1 diff is applied (with different variable names). Mark
+  it "(applied, see Remediation)".
+- [x] Outside the audit: the test docstring at test_signing_authorization.py:83-87
+  still says "It fails today".
+
+**F-06**
+- [x] BREAKS — step 1: "Use it for both `self.pin` (verifier) and
+  `self.pin_secret`" makes the verifier stored in `/flash/keystore/pin` equal
+  to the key that unwraps `enc_secret`, so a flash read yields the key with no
+  brute force. Replace with: compute `k = self._pin_kdf(pin)` once, then
+  `self.pin = tagged_hash("pin-verify", k)` and
+  `self.pin_secret = tagged_hash("pin-secret", k)`.
+- [x] WRONG — PBKDF2 is called "memory-hard". It is CPU-hard only.
+- [x] INCONSISTENT — "stored per-device salt", but the diff derives the salt
+  from `self.secret` and stores nothing. Say "derived from the device secret".
+
+**F-17**
+- [x] BREAKS — step 1: `"\x1eSpecter Firmware Authorization:\n"` is 32 bytes,
+  so the length byte must be `\x20`.
+- [x] BREAKS — step 2: the regex `^b\d+\.\d+\.\d+` misses main-firmware-only
+  messages, whose hrp is `0.0.0rc1-` because the brief name for `main` is `""`
+  (bootloader-spec.md:189). Match the full hrp instead:
+  `^(b\d+\.\d+\.\d+(rc\d+)?-)?(\d+\.\d+\.\d+(rc\d+)?-)?1[a-z0-9]{58}$`
+  (both parts optional, so boot-only upgrades are also caught).
+- [x] REF — table: `bl_signature.c:146-158` → 141-173 (verify call at :172);
+  `signmessage.py:99` → 99-110.
+- [x] UNCLEAR — the 252-byte cap is in `verify_signature`
+  (bl_signature.c:142), not in `blsect_make_signature_message`.
+
+**F-21**
+- [x] INCONSISTENT — Regression test: "red today … Now green". The test passes.
+  Say "Was red before the fix; green now."
+- [x] STALE — Evidence steps 1 and 3 and "Why existing checks…" describe
+  pre-fix code as current ("no length cap", "hex-fallback never runs", "no NUL
+  rejection anywhere"). Current: signmessage.py:63-73. Put them in the past
+  tense.
+- [x] REF — `signmessage.py:83` is `get_xpub`. The address mapping is at 85-90
+  (three places).
+- [x] REF — `signmessage.py:54` is stale. Use 60-73. Path handling: 43-51 → 43-52.
+- [x] WRONG — `base64(flag || compact_sig)` is built in signmessage.py:106-110.
+  ram.py:83-88 returns `(sig, flag)`.
+- [x] UNCLEAR — mark the action plan step 1 diff "(applied)".
+- [x] UNCLEAR — Resolution: the homoglyph variant is closed only for non-ASCII
+  characters. ASCII look-alikes (`l`/`1`, `O`/`0`) still pass.
+
+**F-22**
+- [x] WRONG — see §15.1 for the no-PIN + load chain. (Text corrected; the
+  severity decision stays in §15.1.)
+- [x] WRONG — "No device-side PIN-attempt counter exists anywhere in
+  `src/keystore/`" is false: `FlashKeyStore` has one (flash.py:43-44, 117-118).
+  Say "`MemoryCard` keeps no device-side counter."
+- [x] REF — table: `ram.py:267` is `init`, `unlock` is 289-300;
+  `memorycard.py:88` → 88-102; `get_pin_status` is at secureapplet.py:48-53.
+- [x] UNCLEAR — "the only card-swap defense": the card fingerprint (`hexid`,
+  memorycard.py:357) is also shown in menus. Say "the only card-swap check
+  shown at boot".
+
+**F-31**
+- [x] WRONG — action plan step 3: the native bound uses the binding's own
+  `memlen` (libsecp256k1.c:1822), not the ABI-mismatched `allocated_len`, so
+  there is no dependency on H-16. Say "Fix H-16 in the same change; the two
+  are independent." Also fix the matching sentence in H-16.
+- [x] UNCLEAR — Evidence: for `prooflen` 1..63 the counter wraps and the loop
+  never ends (it hangs after EOF). For `prooflen` 0 the trailing read writes
+  64 bytes *below* the arena.
+- [x] UNCLEAR — native diff: the trailing `mp_stream_read_exactly`
+  (libsecp256k1.c:1840-1844) still ignores short reads. Add a check there.
+- [x] UNCLEAR — Python diff: `RewindError` is caught by `fill_scope`, which
+  returns False (wallet.py:46-48), so the input is silently treated as not
+  owned. Raise `WalletError` to abort instead.
+- [x] REF — table: `liquid/manager.py:489-495` → 486-531 (output calls at
+  517, 527).
+
+**F-32**
+- [x] INCONSISTENT — step 2 text says to wrap "I2C, ExtInt", but the diff wraps
+  only I2C. With `i2c = None`, `poweroff()` (boot.py:37) raises inside its
+  `try`, and `platform.i2c = None` (boot.py:64) may break later battery code.
+  (Verified: `platform.i2c = None` is already handled by `get_battery_status`.)
