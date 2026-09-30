@@ -73,18 +73,18 @@ class UnverifiedInputAmountTest(TestCase):
 
 class DerivedKeySigningOracleTest(TestCase):
     """
-    F-04 (audit.md): PSBTView.sign_input() checks script membership for
-    the root key (`sec in sc.data or pkh in sc.data`) but applies no
-    equivalent check to the derived-key loop right below it. A host that
-    knows any device xpub can request a signature under a key at any
-    derivation path it picks, over an input script that never contains
-    that key at all.
+    F-04 (audit.md): before the fix, PSBTView.sign_input() checked script
+    membership for the root key (`sec in sc.data or pkh in sc.data`) but
+    applied no equivalent check to the derived-key loop right below it. A
+    host that knew any device xpub could request a signature under a key
+    at any derivation path it picked, over an input script that never
+    contained that key at all.
 
     This test encodes the fix from the audit's action plan (the derived
-    loop in psbtview.py must skip keys absent from the script). It fails
-    today because manager.sign_psbtview() -> keystore.sign_input() ->
-    PSBTView.sign_input() signs unconditionally for every bip32_derivation
-    entry whose fingerprint matches the device.
+    loop in psbtview.py must skip keys absent from the script). Before the
+    fix it failed because manager.sign_psbtview() -> keystore.sign_input()
+    -> PSBTView.sign_input() signed unconditionally for every
+    bip32_derivation entry whose fingerprint matched the device.
     """
 
     def setUp(self):

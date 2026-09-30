@@ -649,7 +649,7 @@ fix with a concrete action plan.
 | Malicious firmware update required | ❌ No |
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic |
-| Owning codebase | This repository, `embit` submodule
+| Owning codebase | This repository, `embit` submodule |
 | Files and code regions | [manager.py](../../src/apps/wallets/manager.py), [psbt.py](../../f469-disco/libs/common/embit/src/embit/psbt.py) |
 | Functions and modules | Wallet-manager PSBT preprocessing, `InputScope.verify` |
 
@@ -668,8 +668,10 @@ fix with a concrete action plan.
 
 **Evidence**
 
-The manager calls `inp.verify(ignore_missing=True)` and ignores its return
-value. Missing `non_witness_utxo` data returns `False`, and
+Before the fix, the manager called `inp.verify(ignore_missing=True)` and
+ignored its return value. The current code checks it:
+`if not inp.verify(ignore_missing=True):`
+([manager.py:895](../../src/apps/wallets/manager.py#L895)). Missing `non_witness_utxo` data returns `False`, and
 `InputScope.is_verified` is never enforced or shown to the user. This conflicts
 with the adjacent `embit` warning that hardware wallets must verify previous
 transactions to prevent the SegWit miner-fee attack.
@@ -698,8 +700,8 @@ Two things make this easier than a first reading suggests:
   ([transaction.py:17](../../src/gui/screens/transaction.py#L17)). A user
   following the default flow never sees the amount that was lied about.
 - There is **no compensating fee control at all** — no absolute threshold, no
-  sat/vB rate, no percentage warning — and `meta["warnings"]` is never populated
-  on the Bitcoin path. See F-24.
+  sat/vB rate, no percentage warning. `meta["warnings"]` carries only
+  input-provenance warnings, nothing about the fee. See F-24.
 
 **Why existing checks do not prevent it**
 
@@ -714,8 +716,9 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
 
 **Action plan**
 
-1. In [manager.py:889](../../src/apps/wallets/manager.py#L889), capture
-   and act on the result:
+1. *(Applied, per-input form — see Resolution.)* In
+   [manager.py:894-895](../../src/apps/wallets/manager.py#L894-L895), capture
+   and act on the result. The diff is against the pre-fix code:
 
    ```diff
     # verify, do not require non_witness_utxo if witness_utxo is set
@@ -739,16 +742,17 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
    +meta["fee_verified"] = (unverified_inputs == 0)
    ```
 
-   In `transaction.py`:
+   In [transaction.py:82-92](../../src/gui/screens/transaction.py#L82-L92):
 
    ```diff
-        if meta.get("fee"):
+        fee = meta.get("fee")
+        if fee:
             if send_amount > 0:
-                fee_percent = meta["fee"] * 100 / send_amount
-                fee_txt = "%d satoshi (%.2f%%)" % (meta["fee"], fee_percent)
+                fee_percent = fee * 100 / send_amount
+                fee_txt = "%d satoshi (%.2f%%)" % (fee, fee_percent)
             # back to wallet
             else:
-                fee_txt = "%d satoshi" % (meta["fee"])
+                fee_txt = "%d satoshi" % (fee,)
    -        fee = add_label("Fee: " + fee_txt, scr=self.page)
    -        fee.set_style(0, style)
    +        fee_verified = meta.get("fee_verified", False)
@@ -783,16 +787,18 @@ sets `metainp["warning"] = "Input amount is NOT verified - previous
 transaction missing!"`. This closes the core defect (action-plan item 1, in
 its per-input form) and the regression test above now passes.
 
-Deliberately per-input rather than `meta["warnings"]` — the action plan's own
-snippet appends to the global list unconditionally, which would have broken
-[test_preprocess_single_wallet_tx_produces_no_warning](../../test/tests_native/test_wallet_manager_warnings.py#L149),
-an existing green test whose fixture PSBT carries `witness_utxo` only (no
+Deliberately per-input rather than `meta["warnings"]`. Every input that
+carries only `witness_utxo` is unverified, so a global warning would fire on
+the fixture of
+[test_preprocess_single_wallet_tx_produces_no_warning](../../test/tests_native/test_wallet_manager_warnings.py#L149).
+That existing green test uses a `witness_utxo`-only PSBT (no
 `non_witness_utxo`) and asserts no `meta["warnings"]` key at all.
 
 **Still open, not covered by this fix or its test:**
 
-- GUI surfacing of `fee_verified` / `Fee: ~N satoshi (UNVERIFIED)` (action-plan
-  item 2) — the warning is recorded in `meta` but nothing renders it yet.
+- GUI surfacing (action-plan item 2). `metainp["warning"]` is recorded but
+  nothing renders it. `fee_verified` is not set anywhere, and the
+  `Fee: ~N satoshi (UNVERIFIED)` label does not exist.
 - The fatal-instead-of-warn option (item 3).
 - The F-24 fee sanity check as defense in depth (item 4).
 - The identical discarded-`verify()` call in
@@ -815,7 +821,7 @@ an existing green test whose fixture PSBT carries `witness_utxo` only (no
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic |
 | Owning codebase | This repository, `embit` submodule |
-| Files and code regions | [psbtview.py:850](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L850), [psbtview.py:917](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L917), [manager.py:387](../../src/apps/wallets/manager.py#L387), [manager.py:1030](../../src/apps/wallets/manager.py#L1030), [ram.py:77-78](../../src/keystore/ram.py#L77-L78) ([L77](../../src/keystore/ram.py#L77)) |
+| Files and code regions | [psbtview.py:850](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L850), [psbtview.py:917](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L917), [manager.py:387](../../src/apps/wallets/manager.py#L387), [manager.py:1031](../../src/apps/wallets/manager.py#L1031), [ram.py:77-78](../../src/keystore/ram.py#L77-L78) ([L77](../../src/keystore/ram.py#L77)) |
 | Functions and modules | `PSBTView.sign_input`, wallet-manager signing, `RAMKeyStore.sign_input` |
 
 - **Affected component:** PSBT key derivation and input signing.
@@ -844,8 +850,9 @@ if sec in sc.data or pkh in sc.data:
     sig = root.sign(h)
 ```
 
-The derived-key loop immediately below has no equivalent test
-([psbtview.py:926](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926)):
+Before the fix, the derived-key loop immediately below had no equivalent test
+([psbtview.py:926](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926)).
+It now has the `der_sec`/`der_pkh` check (see **Remediation**). Pre-fix code:
 
 ```python
 for prv, pub in derived_keypairs:
@@ -894,10 +901,12 @@ authorization by the input script. F-05 supplies the xpub that makes the
 derivation records constructible, and F-19 governs whether the surrounding
 warnings are on screen at all.
 
-**Code changes at this tree**
+**Code at this tree**
 
+The derived-key membership fix is present at
+[psbtview.py:926-933](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926-L933).
 `derived_keypairs` is an `OrderedDict` for determinism, which does not
-constrain membership. The x-only comparison is at
+constrain membership. The x-only comparison is still at
 [psbtview.py:883](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L883).
 [ram.py:77-78](../../src/keystore/ram.py#L77-L78) ([L77](../../src/keystore/ram.py#L77)) passes `self.root`, and
 [manager.py:1031](../../src/apps/wallets/manager.py#L1031) calls
@@ -913,7 +922,7 @@ not x-only keys, outside Taproot.
 
 **Action plan**
 
-1. In `PSBTView.sign_input` ([psbtview.py:926-937](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926-L937) ([L926](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926))), gate the derived loop the same way as the root:
+1. *(Applied, see Remediation.)* In `PSBTView.sign_input` ([psbtview.py:926-937](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926-L937) ([L926](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L926))), gate the derived loop the same way as the root:
 
    ```diff
                 inp.partial_sigs[rootpub] = sig.serialize() + bytes([inp_sighash])
@@ -942,7 +951,7 @@ not x-only keys, outside Taproot.
                     raise PSBTError("Derivation path doesn't look right")
                 # Insert into derived_keypairs if not present
    ```
-3. In [manager.py:1024](../../src/apps/wallets/manager.py#L1024), skip
+3. In [manager.py:1031](../../src/apps/wallets/manager.py#L1031), skip
    `keystore.sign_input` when no wallet resolved for that input, rather than
    relying on the generic "Unknown wallet in inputs!" prompt.
 4. This is an upstream `embit` defect reproduced verbatim. Route items 1 and 2
@@ -1092,15 +1101,37 @@ see F-08.
 
 **Recommended fix**
 
-Use a memory-hard PIN KDF. Enforce a minimum PIN length. Bind rollback-sensitive
+Use a slow PIN KDF: memory-hard where available, otherwise iterated PBKDF2,
+which is CPU-hard only. Derive the stored verifier and the key that unwraps
+`enc_secret` as separate outputs. Enforce a minimum PIN length. Bind rollback-sensitive
 state to a protected monotonic value where the hardware allows it. Provide a
 production configuration with stronger hardware-backed readout protection.
 
 **Action plan**
 
-1. Replace the single HMAC with a memory-hard KDF. MicroPython on this board has
-   no scrypt/argon2, so the practical option is a PBKDF2-SHA256 wrapper with a
-   high, tuned iteration count plus a stored per-device salt. In
+1. Replace the single HMAC with a slow KDF. MicroPython on this board has no
+   scrypt or argon2, so the practical option is iterated PBKDF2-SHA256.
+   PBKDF2 is CPU-hard only, not memory-hard: it raises the cost of each guess
+   but does not stop parallel hardware. `hashlib.pbkdf2_hmac` is available in
+   this firmware ([hashlib.c:258-298](../../f469-disco/usermods/uhashlib/hashlib.c#L258-L298) ([L258](../../f469-disco/usermods/uhashlib/hashlib.c#L258))).
+   The salt is derived from the device secret, so nothing extra is stored.
+
+   **Limits of this step.** A slower KDF raises the cost of each guess. It
+   does not remove offline guessing. A flash dump still holds the device
+   secret, the salt, and a way to check a guess. Dropping the stored verifier
+   and checking the PIN by decrypting `enc_secret` would not help either,
+   because the AEAD tag also checks a guess offline. Rough, unmeasured
+   estimate: at 200k iterations, a GPU tries all 10⁴ 4-digit PINs in seconds
+   and all 10⁶ 6-digit PINs in minutes to hours. Short PINs therefore stay
+   weak whatever the KDF. Step 2 (minimum PIN length) and step 3 (RDP
+   limitation) carry the rest. The only full fix is a secret that never sits
+   in readable flash, which this board has only in smartcard mode.
+
+   Call the KDF once per PIN entry and split its output into two
+   domain-separated values. The stored verifier (`self.pin`, saved in
+   `/flash/keystore/pin`) must never equal the key that unwraps `enc_secret`
+   (`self.pin_secret`). Otherwise a flash read yields that key directly, with
+   no brute force at all. In
    [flash.py:33-109](../../src/keystore/flash.py#L33-L109) ([L33](../../src/keystore/flash.py#L33)):
 
    ```diff
@@ -1113,23 +1144,109 @@ production configuration with stronger hardware-backed readout protection.
                 and (self.fingerprint is not None)
             )
     
-   +    def _pin_kdf(self, pin: str) -> bytes:
-   +        return hashlib.pbkdf2_hmac("sha256", pin.encode(),
-   +                                   tagged_hash("pin-salt", self.secret),
-   +                                   self.PIN_KDF_ITERS, 32)
+   +    def _pin_keys(self, pin: str):
+   +        # salt is derived from the device secret, nothing extra is stored
+   +        k = hashlib.pbkdf2_hmac("sha256", pin.encode(),
+   +                                tagged_hash("pin-salt", self.secret),
+   +                                self.PIN_KDF_ITERS, 32)
+   +        # verifier and unwrapping key must differ
+   +        return tagged_hash("pin-verify", k), tagged_hash("pin-secret", k)
    +
         def _unlock(self, pin):
    ```
 
-   Use it for both `self.pin` (verifier) and `self.pin_secret`. Version the
-   on-flash record so existing devices migrate on next successful unlock.
+   Use it in both `_unlock` ([flash.py:127-139](../../src/keystore/flash.py#L127-L139) ([L127](../../src/keystore/flash.py#L127)))
+   and `_set_pin` ([flash.py:177-179](../../src/keystore/flash.py#L177-L179) ([L177](../../src/keystore/flash.py#L177))):
+
+   ```diff
+    # _unlock
+   -        key = tagged_hash("pin", self.secret)
+   -        pin_hmac = hmac.new(key=key, msg=pin.encode(), digestmod="sha256").digest()
+   +        pin_hmac, pin_secret = self._pin_keys(pin)
+            # check hmac is the same
+            if pin_hmac != self.pin:
+            ...
+   -        self.pin_secret = tagged_hash("pin", self.secret + pin.encode())
+   +        self.pin_secret = pin_secret
+    
+    # _set_pin
+   -        key = tagged_hash("pin", self.secret)
+   -        self.pin = hmac.new(key=key, msg=pin, digestmod="sha256").digest()
+   -        self.pin_secret = tagged_hash("pin", self.secret + pin.encode())
+   +        self.pin, self.pin_secret = self._pin_keys(pin)
+   ```
+
+   `SDKeyStore` subclasses `FlashKeyStore`
+   ([sdcard.py:10](../../src/keystore/sdcard.py#L10)), so this covers both
+   keystores.
+
+   **Measure the iteration count.** `200_000 ≈ 1 s` is an estimate. Time
+   `pbkdf2_hmac` on the F469 and set `PIN_KDF_ITERS` from the measurement.
+
+   **Count KDF runs per operation.** Each `_unlock` runs the KDF once, and
+   the existing call chains repeat it:
+
+   | Operation | Call chain | KDF runs |
+   |-----------|------------|----------|
+   | Unlock | `_unlock` | 1 |
+   | Set PIN | `_set_pin` → `_unlock` | 2 |
+   | Change PIN | `change_pin` ([ram.py:359-362](../../src/keystore/ram.py#L359-L362) ([L359](../../src/keystore/ram.py#L359))) → `_unlock(old)` → `_change_pin` → `_unlock(old)` → `_set_pin(new)` → `_unlock(new)` | 4 |
+
+   At about 1 s per run, the UI blocks for 2 s on setup and 4 s on a PIN
+   change. Pass the already-derived keys down the chain instead of
+   re-deriving them, or at least show a loader screen for the whole
+   operation.
+
+   **Migrate crash-safely.** Version the on-flash PIN record: add a
+   `"kdf": 1` field, and treat a missing field as the old scheme. The switch
+   changes `pin_secret`, so `enc_secret` must be re-wrapped. That is two
+   writes, and a power cut between them would leave a verifier and an
+   `enc_secret` from different schemes, cutting off access to the seed. On
+   the first successful unlock with an old record:
+
+   1. Check the PIN the old way and unwrap `enc_secret` with the old
+      `pin_secret`.
+   2. Write `enc_secret` wrapped under the new key to `enc_secret.new`.
+   3. Write the new PIN record with `"kdf": 1`.
+   4. Rename `enc_secret.new` over `enc_secret`.
+
+   If `enc_secret.new` exists at boot, a migration was interrupted. Keep
+   whichever `enc_secret` file matches the scheme in the PIN record, and
+   delete the other.
 2. Enforce a minimum PIN length in
    [input.py:208](../../src/gui/screens/input.py#L208) — the PIN screen
-   currently imposes none.
+   currently imposes none. Given the limits of step 1, this is what actually
+   decides how long offline guessing takes.
 3. Keep the RDP1 limitation documented next to the storage guarantees in
    [docs/security-info.md](../../docs/security-info.md). It already covers this
    at [security-info.md:139-148](../../docs/security-info.md#L139-L148) ([L139](../../docs/security-info.md#L139)), but a
    later bullet in the same document contradicts it — see DOC-01.
+
+**Regression test**
+
+[test_pin_key_separation.py](../../test/tests_native/test_pin_key_separation.py)
+guards the step 1 change. It is green today and must stay green after the KDF
+change. It checks that:
+
+- the stored verifier is never the key that unwraps `enc_secret`;
+- nothing readable from flash without the PIN (the verifier or the device
+  secret) unwraps `enc_secret`;
+- unlock, a wrong PIN, and a PIN change round-trip correctly.
+
+A mutation check that swapped in the "same KDF output for both" variant made 3
+of the 5 tests fail.
+
+`PinGuessCostTest.test_offline_pin_guess_is_expensive` in the same file covers
+F-06's actual defect, the cheap offline guess. It times the keystore's own PIN
+check on wrong guesses, with file writes stubbed out, and requires at least
+5 ms per guess on the host. It checks the property, not a formula, so it also
+catches a later cut of the iteration count. It is marked `@expectedFailure`
+until the fix lands:
+
+| Scheme | Cost per guess (host) | Result |
+|--------|-----------------------|--------|
+| Current single HMAC | ~5 µs | Expected failure. The suite stays green |
+| PBKDF2-SHA256, 200k iterations | ~30 ms | Unexpected success, which fails the run. Remove the decorator |
 
 ---
 
@@ -1147,7 +1264,7 @@ production configuration with stronger hardware-backed readout protection.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic after two user approvals |
 | Owning codebase | This repository, `bootloader` submodule |
-| Files and code regions | [bl_signature.c:22-25](../../bootloader/core/bl_signature.c#L22-L25) ([L22](../../bootloader/core/bl_signature.c#L22)), [bl_signature.c:146-158](../../bootloader/core/bl_signature.c#L146-L158) ([L146](../../bootloader/core/bl_signature.c#L146)); [bl_section.c:391-434](../../bootloader/core/bl_section.c#L391-L434) ([L391](../../bootloader/core/bl_section.c#L391)); [bootloader-spec.md:176-210](../../bootloader/doc/bootloader-spec.md#L176-L210) ([L176](../../bootloader/doc/bootloader-spec.md#L176)); [signmessage.py:99](../../src/apps/signmessage/signmessage.py#L99) |
+| Files and code regions | [bl_signature.c:22-25](../../bootloader/core/bl_signature.c#L22-L25) ([L22](../../bootloader/core/bl_signature.c#L22)), [bl_signature.c:141-173](../../bootloader/core/bl_signature.c#L141-L173) ([L141](../../bootloader/core/bl_signature.c#L141), verify call at [L172](../../bootloader/core/bl_signature.c#L172)); [bl_section.c:391-434](../../bootloader/core/bl_section.c#L391-L434) ([L391](../../bootloader/core/bl_section.c#L391)); [bootloader-spec.md:176-210](../../bootloader/doc/bootloader-spec.md#L176-L210) ([L176](../../bootloader/doc/bootloader-spec.md#L176)); [signmessage.py:99-110](../../src/apps/signmessage/signmessage.py#L99-L110) |
 | Functions and modules | Bootloader signature hashing and verification, `blsect_make_signature_message`, `MessageApp.sign_message` |
 
 - **Affected component:** Bootloader signature verification and the
@@ -1194,8 +1311,10 @@ domain separator on either side.
 The authorized message is printable text, not opaque binary.
 `blsect_make_signature_message` builds `hrp` from brief section names and
 versions (`"b1.22.134rc5-2.0.1-"`), builds `data` from a 5-bit mapping of
-SHA-256 over the concatenated section digests, then Bech32-encodes both. Length
-is capped at 252 bytes by `message_len <= VARINT_MAX_ONE_BYTE`.
+SHA-256 over the concatenated section digests, then Bech32-encodes both. The
+252-byte length cap is not in `blsect_make_signature_message`. It is in
+`verify_signature`, as `message_len <= VARINT_MAX_ONE_BYTE`
+([bl_signature.c:142](../../bootloader/core/bl_signature.c#L142)).
 
 The bootloader specification states the intent plainly: "The Bech32 message as
 an intermediate product allows delegation of the step 5 to an air-gapped device,
@@ -1263,15 +1382,24 @@ either side. The message app accepts any derivation path with no allowlist.
 
 1. **Real fix (coordinated bootloader + firmware change):** give firmware
    authorization its own prefix in `bl_signature.c`, e.g.
-   `#define SPECTER_FW_SIG_PREFIX ("\x1eSpecter Firmware Authorization:\n")`, and
+   `#define SPECTER_FW_SIG_PREFIX ("\x20" "Specter Firmware Authorization:\n")`
+   (the text is 32 bytes, so the length byte is `\x20`), and
    bump the upgrade-file format version so old bootloaders reject new files and
    vice versa. Update
    [bootloader/tools/upgrade-generator.py](../../bootloader/tools/upgrade-generator.py)
    `message` output at the same time.
 2. **Interim, no firmware change required:** in
    [signmessage.py](../../src/apps/signmessage/signmessage.py), refuse to sign
-   any message whose Bech32 HRP matches the bootloader grammar
-   (`^b\d+\.\d+\.\d+`), or refuse paths under the release-key branch. Document
+   any message that matches the full bootloader message grammar,
+   `^(b\d+\.\d+\.\d+(rc\d+)?-)?(\d+\.\d+\.\d+(rc\d+)?-)?1[a-z0-9]{58}$`.
+   Both hrp parts are optional because an upgrade file can carry `boot`,
+   `main`, or both
+   ([upgrade-generator.py:73-78](../../bootloader/tools/upgrade-generator.py#L73-L78)).
+   A `^b\d+\.\d+\.\d+` prefix match is not enough: main-firmware-only
+   messages have an hrp like `0.0.0rc1-`, because the brief name for `main`
+   is `""`
+   ([bootloader-spec.md:189](../../bootloader/doc/bootloader-spec.md#L189)).
+   Alternatively, refuse paths under the release-key branch. Document
    the release-key derivation path and constrain it.
 3. Have the message app detect the bootloader `hrp` grammar and show an explicit
    "This authorizes a FIRMWARE RELEASE" screen rather than the generic message
@@ -6582,7 +6710,7 @@ statement about an attacker who has one and not the other:
 ```
 
 This is a documentation fix. The underlying weakness is F-06 and needs the
-memory-hard KDF proposed there.
+slow PIN KDF proposed there.
 
 ## 9. Properties that hold, and limits of static review
 
@@ -7837,7 +7965,7 @@ component is secure.
 Every §6 finding was re-checked against the current tree: line references,
 quoted code, factual claims, status, internal consistency, and whether each
 action-plan diff applies and is correct. F-23 was corrected earlier in the same
-pass and is not listed. Nothing below has been applied yet.
+pass and is not listed. Applied items move to §15.6.
 
 Tags: **BREAKS** — the proposed fix would break the firmware or weaken
 security if applied as written. **WRONG** — a factual error. **STALE** — the
@@ -7872,62 +8000,43 @@ misleading or incomplete. **REF** — a wrong line reference.
 
 ### 15.2 High
 
-**F-03**
-- [ ] STALE — Evidence: "calls `inp.verify(...)` and ignores its return value"
-  is pre-fix. Current: `if not inp.verify(ignore_missing=True):`
-  (manager.py:895). Prefix with "Before the fix, …".
-- [ ] INCONSISTENT — Attack trace: "`meta["warnings"]` is never populated on
-  the Bitcoin path" contradicts F-24: `add_warnings` (manager.py:990-1009) fills
-  it for mixed and unknown inputs. Replace with "`meta["warnings"]` carries only
-  input-provenance warnings, nothing about the fee."
-- [ ] REF — action plan step 1: `manager.py:889` is the `for` loop. Use 894-895.
-- [ ] STALE — the step 1 diff context `-inp.verify(ignore_missing=True)` no
-  longer exists. Mark it "(applied, per-input form)".
-- [ ] STALE — the step 2 `transaction.py` diff context does not match. Current
-  code is `fee = meta.get("fee")` / `if fee:` (transaction.py:82-92). Rebase it.
-- [ ] UNCLEAR — Resolution: "appends to the global list unconditionally" is
-  wrong. The real reason is that every input with only `witness_utxo` is
-  unverified, so the test fixture always triggers the warning.
-- [ ] UNCLEAR — "Still open": `fee_verified` is never set anywhere. What is
-  recorded but not rendered is `metainp["warning"]`.
-- [ ] UNCLEAR — the Owning codebase table row is missing its trailing `|`.
-
 **F-04**
-- [ ] STALE — Evidence: the quoted derived-key loop "has no equivalent test",
+- [x] STALE — Evidence: the quoted derived-key loop "has no equivalent test",
   but psbtview.py:926-933 now has the `der_sec`/`der_pkh` check. Prefix with
   "Before the fix, …".
-- [ ] UNCLEAR — rename the heading "Code changes at this tree" to "Code at this
+- [x] UNCLEAR — rename the heading "Code changes at this tree" to "Code at this
   tree", and state that the fix is present at psbtview.py:926-933 while the
   x-only comparison is still at :883.
-- [ ] REF — action plan step 3: `manager.py:1024` is `for w in wallets:`.
+- [x] REF — action plan step 3: `manager.py:1024` is `for w in wallets:`.
   `keystore.sign_input` is at :1031.
-- [ ] REF — table: `manager.py:1030` → 1031.
-- [ ] STALE — the step 1 diff is applied (with different variable names). Mark
+- [x] REF — table: `manager.py:1030` → 1031.
+- [x] STALE — the step 1 diff is applied (with different variable names). Mark
   it "(applied, see Remediation)".
-- [ ] Outside the audit: the test docstring at test_signing_authorization.py:83-87
+- [x] Outside the audit: the test docstring at test_signing_authorization.py:83-87
   still says "It fails today".
 
 **F-06**
-- [ ] BREAKS — step 1: "Use it for both `self.pin` (verifier) and
+- [x] BREAKS — step 1: "Use it for both `self.pin` (verifier) and
   `self.pin_secret`" makes the verifier stored in `/flash/keystore/pin` equal
   to the key that unwraps `enc_secret`, so a flash read yields the key with no
   brute force. Replace with: compute `k = self._pin_kdf(pin)` once, then
   `self.pin = tagged_hash("pin-verify", k)` and
   `self.pin_secret = tagged_hash("pin-secret", k)`.
-- [ ] WRONG — PBKDF2 is called "memory-hard". It is CPU-hard only.
-- [ ] INCONSISTENT — "stored per-device salt", but the diff derives the salt
+- [x] WRONG — PBKDF2 is called "memory-hard". It is CPU-hard only.
+- [x] INCONSISTENT — "stored per-device salt", but the diff derives the salt
   from `self.secret` and stores nothing. Say "derived from the device secret".
 
 **F-17**
-- [ ] BREAKS — step 1: `"\x1eSpecter Firmware Authorization:\n"` is 32 bytes,
+- [x] BREAKS — step 1: `"\x1eSpecter Firmware Authorization:\n"` is 32 bytes,
   so the length byte must be `\x20`.
-- [ ] BREAKS — step 2: the regex `^b\d+\.\d+\.\d+` misses main-firmware-only
+- [x] BREAKS — step 2: the regex `^b\d+\.\d+\.\d+` misses main-firmware-only
   messages, whose hrp is `0.0.0rc1-` because the brief name for `main` is `""`
   (bootloader-spec.md:189). Match the full hrp instead:
-  `^(b\d+\.\d+\.\d+(rc\d+)?-)?\d+\.\d+\.\d+(rc\d+)?-1[a-z0-9]{58}$`.
-- [ ] REF — table: `bl_signature.c:146-158` → 141-173 (verify call at :172);
+  `^(b\d+\.\d+\.\d+(rc\d+)?-)?(\d+\.\d+\.\d+(rc\d+)?-)?1[a-z0-9]{58}$`
+  (both parts optional, so boot-only upgrades are also caught).
+- [x] REF — table: `bl_signature.c:146-158` → 141-173 (verify call at :172);
   `signmessage.py:99` → 99-110.
-- [ ] UNCLEAR — the 252-byte cap is in `verify_signature`
+- [x] UNCLEAR — the 252-byte cap is in `verify_signature`
   (bl_signature.c:142), not in `blsect_make_signature_message`.
 
 **F-21**
@@ -8176,3 +8285,25 @@ Group checks passed without issues for everything not listed. Examples: the
 F-23 rewrite; the F-24 fee-check diff context; the F-30 diff contexts; the F-36
 reproduction output; F-35's reproduced collision and `lq16…` output; the F-08
 production key lists and thresholds; and all F-32 port line references.
+
+### 15.6 Done
+
+**F-03**
+- [x] STALE — Evidence: "calls `inp.verify(...)` and ignores its return value"
+  is pre-fix. Current: `if not inp.verify(ignore_missing=True):`
+  (manager.py:895). Prefix with "Before the fix, …".
+- [x] INCONSISTENT — Attack trace: "`meta["warnings"]` is never populated on
+  the Bitcoin path" contradicts F-24: `add_warnings` (manager.py:990-1009) fills
+  it for mixed and unknown inputs. Replace with "`meta["warnings"]` carries only
+  input-provenance warnings, nothing about the fee."
+- [x] REF — action plan step 1: `manager.py:889` is the `for` loop. Use 894-895.
+- [x] STALE — the step 1 diff context `-inp.verify(ignore_missing=True)` no
+  longer exists. Mark it "(applied, per-input form)".
+- [x] STALE — the step 2 `transaction.py` diff context does not match. Current
+  code is `fee = meta.get("fee")` / `if fee:` (transaction.py:82-92). Rebase it.
+- [x] UNCLEAR — Resolution: "appends to the global list unconditionally" is
+  wrong. The real reason is that every input with only `witness_utxo` is
+  unverified, so the test fixture always triggers the warning.
+- [x] UNCLEAR — "Still open": `fee_verified` is never set anywhere. What is
+  recorded but not rendered is `metainp["warning"]`.
+- [x] UNCLEAR — the Owning codebase table row is missing its trailing `|`.

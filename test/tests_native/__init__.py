@@ -7,3 +7,4 @@ from .test_transaction_confirmation import *
 from .test_change_security import *
 from .test_message_signing_display import *
 from .test_signing_authorization import *
+from .test_pin_key_separation import *
