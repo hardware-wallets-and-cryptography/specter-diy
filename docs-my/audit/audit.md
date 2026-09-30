@@ -151,8 +151,8 @@ pre-confirmation out-of-bounds native write in the Liquid rangeproof path. F-32
 is a boot fault that exposes both persistent partitions read-write over USB MSC
 and then chains into F-06 and F-15. F-34 is smartcard-driven stack corruption
 before PIN entry, with unresolved control-flow impact. F-33 shows separately
-that an unsigned upgrade can permanently clear firmware-region write protection,
-even though its bytes never execute.
+that an unsigned upgrade can persistently clear firmware-region write protection,
+until the next successful signed upgrade, even though its bytes never execute.
 
 The supply chain shows **no evidence of tampering anywhere it could be
 checked**, including one clean cryptographic proof of non-tampering: the
@@ -190,7 +190,7 @@ By severity:
 
 - **Critical:** none.
 - **High:** F-03, F-04, F-06, F-17, F-21, F-22, F-31, F-32.
-- **Medium:** F-05, F-07, F-08, F-10, F-11, F-15, F-18, F-19, F-23, F-24, F-25,
+- **Medium:** F-05, F-07, F-08, F-10 (resolved), F-11, F-15, F-18, F-19, F-23, F-24, F-25,
   F-28, F-30, F-33, F-34, F-35.
 - **Low:** F-09, F-13, F-14, F-16, F-36, H-01, H-03, H-05, H-06, H-08, H-09,
   H-10, H-11, H-12, H-13, H-14, H-15, H-16, H-17, H-18, H-19, H-20, H-21, H-22,
@@ -391,7 +391,12 @@ or impact needs the named dynamic test.
 | Severity | ID | Result | Required validation |
 | --- | --- | --- | --- |
 | High | F-32 | Boot-time USB hardening is applied last, and MicroPython's fault default is CDC+MSC | Force an exception in `boot.py:12-50` on target and check CDC+MSC, REPL, and internal-flash exposure. Establish whether an attacker can induce the I2C exception on assembled hardware |
-| Medium | F-10 | `non_witness_utxo` parsing is not bounded to its declared field length | Run crafted parser inputs on the target MicroPython build and establish whether desynchronization crosses a security boundary |
+
+**Resolved** since the plausible rating. Kept for traceability.
+
+| Severity | ID | Result | Resolution |
+| --- | --- | --- | --- |
+| Medium | F-10 | `non_witness_utxo` parsing was not bounded to its declared field length | embit `ff98e0f` bounds the value and requires exact consumption (psbt.py:334-345) |
 
 **Design limitations and hardening results.** These are material, and they are
 deliberately not relabelled as vulnerabilities.
@@ -2091,6 +2096,37 @@ to secure a port-owned USB device.
     
     # inject version and i2c to platform module
    ```
+
+   F-15 step 2 edits the same lines. It removes `import sys` and the
+   `sys.path` cleanup. It pins `sys.path` to `[""]` and runs `uos.chdir("/")`
+   before `import pyb, os, …`. That import is not safe as it stands: `os` is a
+   weak link that is resolved only after a `sys.path` search, so a planted
+   `/qspi/os.py` runs before these USB-off lines (F-15, Scope constraints).
+   Apply both fixes as one change, with the F-15 lines first. Use `uos`, a
+   built-in, for `dupterm`:
+
+   ```python
+   # boot.py -- run on boot-up
+   # can run arbitrary Python, but best to keep it minimal
+   import sys, uos
+   # keep "": frozen modules match bare names only
+   # "/" is the VFS root; nothing is mounted there
+   sys.path[:] = [""]
+   uos.chdir("/")
+
+   # first statements, before anything fallible
+   import pyb
+   pyb.usb_mode(None)
+   uos.dupterm(None, 0)
+   uos.dupterm(None, 1)
+
+   import os, micropython, time
+
+   # power hold
+   ```
+
+   `pyb` is a built-in, so importing it does not search the path. Checked
+   against source only.
 2. In [boot.py:18-50](../../boot/main/boot.py#L18-L50) ([L18](../../boot/main/boot.py#L18)), wrap the fallible
    peripheral setup (I2C, ExtInt) so a raise cannot skip the rest of
    `boot.py`, and guard `poweroff()` against `i2c = None`:
@@ -2293,6 +2329,20 @@ An emulator presents its own key, reports `PIN_UNLOCKED`, and returns a
 correctly encoded constant-key blob containing attacker entropy. The device
 accepts the internally valid session and blob.
 
+The load is not automatic (F-22). With `PIN_UNLOCKED`, `_unlock` never runs, so
+`check_saved()` never sets `_is_key_saved`
+([memorycard.py:130](../../src/keystore/memorycard.py#L130)), and the init-menu
+load button stays hidden ([specter.py:199](../../src/specter.py#L199)). The
+blob loads only if the user first loads or enters some key, opens "Smartcard
+storage", and runs "Get card info" or "Save key to the card". Both call
+`get_secret_info()`, which sets `_is_key_saved`
+([memorycard.py:438](../../src/keystore/memorycard.py#L438)). Through "Save
+key", the blob survives only if the user cancels "Overwrite data?"
+([memorycard.py:243-247](../../src/keystore/memorycard.py#L243-L247)). An
+emulator that reports `PIN_LOCKED` and accepts any PIN reaches `_unlock` and
+shows the button at boot, but the anti-phishing words then differ
+([memorycard.py:81](../../src/keystore/memorycard.py#L81)).
+
 **Existing protections that remain**
 
 Fresh host ephemeral material, a card nonce, separate directional keys, message
@@ -2310,8 +2360,11 @@ The user-visible mitigation also does not always hold. Identity changes are
 visible only when a PIN screen is drawn:
 
 - The anti-phishing words come from `get_auth_word`, which is only ever called
-  from `PinScreen` ([ram.py:302](../../src/keystore/ram.py#L302)). No
-  PIN screen means no words.
+  from `PinScreen`. Only `get_pin`
+  ([ram.py:311](../../src/keystore/ram.py#L311)) and `setup_pin`
+  ([ram.py:331](../../src/keystore/ram.py#L331),
+  [ram.py:339](../../src/keystore/ram.py#L339)) pass it. No PIN screen means
+  no words.
 - Whether a PIN screen appears is decided by a byte the **card** sends. See
   F-22. A hostile card that reports `PIN_UNLOCKED` makes `RAMKeyStore.unlock`'s
   `while self.is_locked` loop skip, so the user is never asked for a PIN and never
@@ -2332,7 +2385,15 @@ SD. See H-14.
 [securechannel.py:52-58](../../src/keystore/javacard/applets/securechannel.py#L52-L58) ([L52](../../src/keystore/javacard/applets/securechannel.py#L52))
 fetches `card_pubkey` from the card and never pins it;
 [securechannel.py:201](../../src/keystore/javacard/applets/securechannel.py#L201)
-discards it on close. The public-constant blob format is at
+discards it on close. `close()` has one caller, the "Use a different card"
+flow ([memorycard.py:418](../../src/keystore/memorycard.py#L418)). A reconnect
+after card removal reuses the cached key
+([securechannel.py:79-80](../../src/keystore/javacard/applets/securechannel.py#L79-L80)),
+so an in-session swap fails the handshake. The key is fetched again only on the
+first open after boot and after `close()`, including the implicit reopen in
+`request()`
+([securechannel.py:186-187](../../src/keystore/javacard/applets/securechannel.py#L186-L187)).
+The public-constant blob format is at
 [memorycard.py:171](../../src/keystore/memorycard.py#L171) and
 [memorycard.py:185](../../src/keystore/memorycard.py#L185):
 
@@ -2355,32 +2416,194 @@ blob format, or put it behind an explicit per-load integrity warning.
 
 **Action plan**
 
-1. In [memorycard.py:13-14](../../src/keystore/memorycard.py#L13-L14) ([L13](../../src/keystore/memorycard.py#L13)) and
-   [memorycard.py:341-353](../../src/keystore/memorycard.py#L341-L353) ([L341](../../src/keystore/memorycard.py#L341)), pin the
-   card key at first pairing, stored AEAD-encrypted under the device secret:
+1. Pin the card key where it is set, in `SecureChannel.get_card_pubkey`
+   ([securechannel.py:52-58](../../src/keystore/javacard/applets/securechannel.py#L52-L58) ([L52](../../src/keystore/javacard/applets/securechannel.py#L52))).
+   Every fetch goes through it: the first open after boot, the open after
+   `close()`, and the implicit reopen in `request()`
+   ([securechannel.py:186-187](../../src/keystore/javacard/applets/securechannel.py#L186-L187)).
+   A check only in `init`, or only after `open_secure_channel()`
+   ([memorycard.py:327](../../src/keystore/memorycard.py#L327)), misses the
+   last case. After `close()`, `connected` stays True, so `ping()`
+   ([memorycard.py:311](../../src/keystore/memorycard.py#L311)) reopens with
+   the new card's key and line 327 is never reached.
+
+   - **Storage.** `/flash/keystore/card_pub` holds the serialized key as AEAD
+     associated data, MAC-keyed by `tagged_hash("card_pub", secret)`. The wipe
+     deletes it with the rest of `/flash`. The MAC key sits in the same flash,
+     so it adds little against a flash writer (F-06).
+   - **Load.** `init` loads it into `sc.expected_pubkey` before `check_card`.
+     A record that fails to verify raises. It never falls back to TOFU.
+   - **First record.** `init` records the key after the first `check_card` if
+     no record exists (TOFU at first boot). This does not depend on the PIN
+     state the card reports (F-22).
+   - **Mismatch.** `get_card_pubkey` raises `SecureChannelError`, and
+     `check_card` converts it to `KeyStoreError`. `setup` shows the error and
+     retries ([specter.py:128-130](../../src/specter.py#L128-L130)) until the
+     paired card is back.
+   - **"Use a different card" becomes an explicit re-pair.** The user confirms
+     a prompt that names the current card fingerprint and enters the current
+     card's PIN, over the pinned channel. The in-RAM pin is cleared, and
+     `_userkey` and `_is_key_saved` are reset. The new card must pass
+     `check_card(check_pin=True)` and `unlock()`. Only then does `_pair_card()`
+     replace `card_pub`, and the new fingerprint is shown. On failure, the old
+     pin is restored and the channel is dropped.
 
    ```diff
+   --- a/src/keystore/javacard/applets/securechannel.py
+   +++ b/src/keystore/javacard/applets/securechannel.py
+   @@ -42,6 +42,8 @@
+            self.applet = applet
+            self.iv = 0
+            self.card_pubkey = None
+   +        # serialized key the card must present, None = accept any (TOFU)
+   +        self.expected_pubkey = None
+            self.card_aes_key = None
+            self.host_aes_key = None
+            self.card_mac_key = None
+   @@ -54,7 +56,13 @@
+            This key doesn't change unless applet is reinstalled.
+            """
+            sec = self.applet.request(self.GET_PUBKEY)
+   -        self.card_pubkey = secp256k1.ec_pubkey_parse(sec)
+   +        pub = secp256k1.ec_pubkey_parse(sec)
+   +        # the only place card_pubkey is set: first open, open after close(),
+   +        # and the implicit reopen in request() all pass through here
+   +        if (self.expected_pubkey is not None
+   +                and secp256k1.ec_pubkey_serialize(pub) != self.expected_pubkey):
+   +            raise SecureChannelError("Card identity mismatch")
+   +        self.card_pubkey = pub
+            return self.card_pubkey
+    
+        def derive_keys(self, shared_secret):
+   --- a/src/keystore/memorycard.py
+   +++ b/src/keystore/memorycard.py
+   @@ -1,6 +1,7 @@
+    from .core import KeyStoreError, PinError
+    from .ram import RAMKeyStore
+    from .javacard.applets.memorycard import MemoryCardApplet, SecureError
+   +from .javacard.applets.securechannel import SecureChannelError
+    from .javacard.util import get_connection
+    from platform import CriticalErrorWipeImmediately
+    import platform
+   @@ -12,6 +13,7 @@
+    from io import BytesIO
     from binascii import hexlify
     import lvgl as lv
    +import secp256k1
-    ...
-   +    def _check_card_identity(self):
-   +        sec = secp256k1.ec_pubkey_serialize(self.applet.card_pubkey)
-   +        known = self._load_paired_card_pubkey()      # from /flash/keystore/card_pub
-   +        if known is None:
-   +            self._save_paired_card_pubkey(sec)       # TOFU, but recorded
-   +        elif known != sec:
-   +            raise KeyStoreError("Smartcard identity changed! Card may have been swapped.")
+    
+    
+    class MemoryCard(RAMKeyStore):
+   @@ -324,7 +326,12 @@
+                    self.applet.select()
+                except:
+                    raise KeyStoreError("Failed to select the applet")
+   -            self.applet.open_secure_channel()
+   +            try:
+   +                self.applet.open_secure_channel()
+   +            except SecureChannelError as e:
+   +                raise KeyStoreError(
+   +                    "Secure channel failed: %s\n\nIs this the paired card?" % e
+   +                )
+                self.connected = True
+            self.applet.get_pin_status()
+            if check_pin and self.is_locked:
+   @@ -337,6 +344,34 @@
+                scr.tick(5)
+            if scr.waiting:
+                scr.waiting = False
    +
+   +    def _load_paired_card(self):
+   +        """Load the pinned card key into the secure channel"""
+   +        try:
+   +            with open(self.path + "/card_pub", "rb") as f:
+   +                data = f.read()
+   +        except OSError:
+   +            # not paired yet
+   +            self.applet.sc.expected_pubkey = None
+   +            return
+   +        try:
+   +            sec, _ = aead_decrypt(data, tagged_hash("card_pub", self.secret))
+   +        except Exception:
+   +            # fail closed, never fall back to TOFU
+   +            raise KeyStoreError("Paired card record is corrupted.")
+   +        self.applet.sc.expected_pubkey = sec
+   +
+   +    def _pair_card(self):
+   +        """Pin the key of the connected card if none is pinned"""
+   +        if self.applet.sc.expected_pubkey is not None:
+   +            return
+   +        sec = secp256k1.ec_pubkey_serialize(self.applet.card_pubkey)
+   +        self.save_aead(
+   +            self.path + "/card_pub",
+   +            adata=sec,
+   +            key=tagged_hash("card_pub", self.secret),
+   +        )
+   +        self.applet.sc.expected_pubkey = sec
+    
         async def init(self, show_fn, show_loader):
-            ...
+            """
+   @@ -347,8 +382,12 @@
+            self.show = show_fn
+            platform.maybe_mkdir(self.path)
+            self.load_secret(self.path)
+   +        # the pin must be set before the first open
+   +        self._load_paired_card()
+    
             await self.check_card()
-   +        self._check_card_identity()
+   +        # first card seen on this device: record it (TOFU)
+   +        self._pair_card()
             # the rest can be done with parent
             await super().init(show_fn, show_loader)
+    
+   @@ -409,7 +448,10 @@
+                            "Switching the smartcard",
+                            "To use a different smartcard you need "
+                            "to provide a PIN for current one first!\n\n"
+   -                        "Continue?"
+   +                        "The device will then forget card %s "
+   +                        "and pair with the next card you insert.\n\n"
+   +                        "Continue?" % self.hexid,
+   +                        warning="The current card will no longer be accepted",
+                        )
+                    ):
+                        self.lock()
+   @@ -417,9 +459,23 @@
+                        self.lock()
+                        self.applet.close_secure_channel()
+                        self._userkey = None
+   +                    self._is_key_saved = False
+   +                    # explicit re-pair: accept one new card key
+   +                    self.applet.sc.expected_pubkey = None
+                        await self.show(Alert("Please swap the card", "Now you can insert another card and set it up.", button_text="Continue"))
+   -                    await self.check_card(check_pin=True)
+   -                    await self.unlock()
+   +                    try:
+   +                        await self.check_card(check_pin=True)
+   +                        await self.unlock()
+   +                    except Exception as e:
+   +                        # new card not set up: restore the old pin
+   +                        self._load_paired_card()
+   +                        self.applet.sc.is_open = False
+   +                        self.applet.sc.card_pubkey = None
+   +                        self.connected = False
+   +                        raise e
+   +                    # replaces /card_pub on flash
+   +                    self._pair_card()
+   +                    await self.show(Alert("Card paired", "New card fingerprint: %s" % self.hexid, button_text="OK"))
+                elif menuitem == 4:
+                    await self.show_card_info()
+                else:
    ```
 
-   Call it from `MemoryCard.init` before any PIN decision.
+   `git apply --check` passes against the current tree. Checked in CPython with
+   a fake card: first boot records card A; a reboot with an emulator or another
+   genuine card is rejected; an in-session swap is rejected; `close()` followed
+   by the implicit reopen via `ping()` is rejected; re-pair A→B works, after
+   which A is rejected; a failed re-pair (wrong PIN) keeps B's record; a
+   corrupted record fails closed. On the unpatched source the `ping()` bypass
+   reproduces. Not tested on hardware. TOFU remains at first boot and after
+   re-pair, and a new card that reports `PIN_UNLOCKED` is paired with no PIN
+   entered (F-22).
 2. Remove the `b"\xcc"*32` blob format, or gate it behind a per-load "this seed
    is unauthenticated" prompt.
 3. Always require PIN entry at boot (F-22), so the anti-phishing words are
@@ -2566,11 +2789,11 @@ something. Keep the RDP1 limitation documented next to the storage guarantees.
 
 ---
 
-### F-10: `non_witness_utxo` parsing is not bounded to its declared field length
+### F-10: `non_witness_utxo` parsing was not bounded to its declared field length
 
 | Criterion | Value |
 |----------|-------|
-| Status | Plausible |
+| Status | Resolved (embit `ff98e0f`) |
 | Severity | Medium |
 | Confidence | High for the desynchronization; Medium for the security impact |
 | Physical access required | ❌ No |
@@ -2590,20 +2813,20 @@ something. Keep the RDP1 limitation documented next to the storage guarantees.
 - **Prerequisites:** An accepted signing request that contains
   `non_witness_utxo`.
 - **Default reachability:** Any Bitcoin `sign` command carrying that field.
-- **Impact on funds:** Two parser passes can see different key sets over
-  identical bytes. That breaks parser determinism and can break display/signing
-  equivalence. No direct theft primitive was completed.
+- **Impact on funds:** Before `ff98e0f`, two parser passes could see different
+  key sets over identical bytes. That broke parser determinism and could break
+  display/signing equivalence. No direct theft primitive was completed.
 - **Security property violated:** Every parsing and normalization pass must
   enforce identical field boundaries and canonical scope contents.
 
 **Evidence**
 
-`InputScope.read_value` reads the declared compact length, but parses the
-embedded transaction directly from the parent stream. It neither wraps the value
-in a bounded reader nor requires exact consumption. Independent `PSBTView`
-scanners honor the declared length.
+Before `ff98e0f`, `InputScope.read_value` read the declared compact length, but
+parsed the embedded transaction directly from the parent stream. It neither
+wrapped the value in a bounded reader nor required exact consumption.
+Independent `PSBTView` scanners honor the declared length.
 
-A targeted check smuggled a `PSBT_IN_SIGHASH_TYPE` value inside the declared
+On the pre-fix tree, a targeted check smuggled a `PSBT_IN_SIGHASH_TYPE` value inside the declared
 `non_witness_utxo` length:
 
 ```text
@@ -2611,24 +2834,28 @@ InputScope pass      -> sighash_type = 0x81
 length-honoring scan -> key 0x03 not found in scope
 ```
 
-The shown variant later appears to fail closed on a duplicate-key error, so theft is not claimed.
+The shown variant later appeared to fail closed on a duplicate-key error, so theft was not claimed.
 
 **Attack trace**
 
 Smuggle a sighash record inside the declared UTXO length, so `InputScope` sees it
 but the length-honoring scan does not.
 
-**Why existing checks do not prevent it**
+**Why existing checks did not prevent it**
 
-No bounded substream and no exact-consumption check ties embedded transaction
-parsing to the PSBT field boundary.
+Before `ff98e0f`, no bounded substream and no exact-consumption check tied
+embedded transaction parsing to the PSBT field boundary.
 
 **Code at this tree**
 
-Fixed in embit `ff98e0f`:
-[psbt.py:328](../../f469-disco/libs/common/embit/src/embit/psbt.py#L328) now
-reads the value through `_BoundedReader(stream, length)` and calls
-`value_stream.finish()` on both branches.
+Fixed in embit `ff98e0f` (Mike Tolkachev, 2026-09-17), which the pinned
+`b2e606b` includes. It is on the fork's `origin/master` and `origin/int`.
+[psbt.py:334-345](../../f469-disco/libs/common/embit/src/embit/psbt.py#L334-L345)
+now reads the value through `_BoundedReader(stream, length)` and calls
+`value_stream.finish()` on both branches. The wallet manager copies the value
+with the same declared length
+([manager.py:947-956](../../src/apps/wallets/manager.py#L947-L956)), so the
+smuggled record is now rejected before normalization.
 
 **Recommended fix**
 
@@ -2642,11 +2869,11 @@ passes to produce the same scope boundaries and key set.
    [psbt.py:328-346](../../f469-disco/libs/common/embit/src/embit/psbt.py#L328-L346).
 2. Partially done: embit
    [test_parsing.py:150](../../f469-disco/libs/common/embit/tests/tests/test_parsing.py#L150)
-   (`test_non_witness_boundary`) covers the field boundaries. Still missing: a
-   differential test asserting `InputScope` and the length-honoring `PSBTView`
-   scanner see the same key set over identical bytes.
-3. This is an upstream `embit` defect. Route it through coordinated disclosure
-   together with F-04 (§12.2).
+   (`test_non_witness_boundary`) covers the field boundaries. Follow-up, not
+   blocking: a differential test asserting `InputScope` and the length-honoring
+   `PSBTView` scanner see the same key set over identical bytes (§10.2 item 7).
+3. Confirm that upstream `embit` carries `ff98e0f`. If it does, F-10 needs no
+   disclosure. If it does not, send it with F-04 (§12.2).
 
 ---
 
@@ -2790,7 +3017,9 @@ unknown and unblinded, and do not compute a trusted input summary from them.
   primitive. F-32 supplies read-write MSC access to both partitions if its boot
   fault occurs.
 - **Default reachability:** The non-frozen `import config` runs on every
-  production boot, before PIN entry.
+  production boot, before PIN entry. Earlier still, `import os` at
+  [boot.py:3](../../boot/main/boot.py#L3) searches `sys.path` before it falls
+  back to the built-in `uos` (see Scope constraints).
 - **Impact on funds:** Persistent pre-PIN arbitrary Python runs inside the signed
   firmware trust boundary. It can read seeds and keys after unlock, change
   display or signing behavior, or exfiltrate secrets, while the genuine firmware
@@ -2835,14 +3064,38 @@ entry. The authenticated settings loaders are not involved.
 **Attack trace**
 
 Write `/qspi/config.py` and reboot normally. It executes when frozen `boot.py`
-imports frozen `platform.py`, before PIN entry. The implant persists without
+imports frozen `platform.py`, before PIN entry. `/qspi/os.py` runs even earlier,
+at `boot.py:3`. The implant persists without
 replacing firmware or changing the device secret.
 
 **Scope constraints**
 
 A normal host command cannot choose a filename in the QSPI root, and SD is not
-mounted into `sys.path` in the production build. Frozen `boot.py`, frozen
-`main.py`, and built-in modules cannot be shadowed. The missing piece is a write
+mounted into `sys.path` in the production build. Frozen `boot.py` and frozen
+`main.py` run frozen-first
+([pyexec.c:553-557](../../f469-disco/micropython/lib/utils/pyexec.c#L553-L557)),
+and built-in modules resolve before any path search
+([builtinimport.c:341-350](../../f469-disco/micropython/py/builtinimport.c#L341-L350)).
+Other names can be shadowed:
+
+- Weak-linked aliases resolve only after the path search misses
+  ([builtinimport.c:387-397](../../f469-disco/micropython/py/builtinimport.c#L387-L397)).
+  The port registers `uos` and `utime`, not `os` and `time`
+  ([mpconfigport.h:243-244](../../f469-disco/micropython/ports/stm32/mpconfigport.h#L243-L244)).
+  So `/qspi/os.py` runs at [boot.py:3](../../boot/main/boot.py#L3), before
+  `import config`. `json`, `binascii`, `hashlib`, and `io` behave the same. The
+  result is not cached, so every such import searches `sys.path` again.
+- A CWD directory shadows a frozen single-file module. The `""` entry stats the
+  bare name before appending `.py`, and a directory returns first
+  ([builtinimport.c:86-96](../../f469-disco/micropython/py/builtinimport.c#L86-L96)).
+  Frozen lookup matches only the exact name or a `name/` prefix
+  ([frozenmod.c:101-116](../../f469-disco/micropython/py/frozenmod.c#L101-L116)),
+  so `config` misses a frozen `config.py`. `/qspi/config/` shadows a frozen
+  `config.py`, and `/qspi/specter/` shadows frozen `specter.py`. Frozen packages
+  are not shadowed on the same entry, because frozen stat runs first
+  ([builtinimport.c:59-67](../../f469-disco/micropython/py/builtinimport.c#L59-L67)).
+
+The missing piece is a write
 primitive: physical flash access, or another vulnerability. F-32's read-write MSC
 state supplies it and turns this into a persistent chain.
 
@@ -2879,17 +3132,24 @@ entry, which is what makes that probe reach writable storage.
 
 **Recommended fix**
 
-Replace path mutation with a frozen/native allowlist. Remove the `""` entry.
-Move CWD to RAM or another non-persistent location before imports. Make the
+Pin `sys.path` to `[""]` and `uos.chdir("/")` as the first statements of
+`boot.py`. Keep `""`: it is the only entry that adds no prefix, and frozen
+lookup matches bare names only
+([builtinimport.c:116-121](../../f469-disco/micropython/py/builtinimport.c#L116-L121),
+[frozenmod.c:101-116](../../f469-disco/micropython/py/frozenmod.c#L101-L116)).
+Remove `/qspi`, `/qspi/lib`, `/flash`, and `/flash/lib`; F-32 exposes both
+partitions read-write. `/` is the empty VFS root, so relative stats there return
+not-found ([vfs.c:57-96](../../f469-disco/micropython/extmod/vfs.c#L57-L96),
+[vfs.c:129-134](../../f469-disco/micropython/extmod/vfs.c#L129-L134)). Use
+`uos`, because `import os` itself searches `sys.path`. Make the
 `config` choice a frozen build-time setting or authenticated data rather than
 executable Python. Test that every production import resolves only to frozen or
 native code.
 
 **Action plan**
 
-1. Remove the executable-import escape hatch. Freeze a `config.py` into the
-   manifest so the VFS is never probed, or replace the mechanism with
-   authenticated data. In [platform.py:9-12](../../src/platform.py#L9-L12) ([L9](../../src/platform.py#L9)):
+1. Remove the executable-import escape hatch. Freeze a `config.py`, or replace
+   the mechanism with authenticated data. In [platform.py:9-12](../../src/platform.py#L9-L12) ([L9](../../src/platform.py#L9)):
 
    ```diff
     try:
@@ -2900,23 +3160,53 @@ native code.
         import config_default as config
    ```
 
-   and add `config.py` to [manifests/](../../manifests/) so the frozen module
-   always wins. Note the bare `except:` must become `except ImportError:` or a
-   syntax error in a planted `/qspi/config.py` would still be swallowed.
-2. In [boot.py:6-10](../../boot/main/boot.py#L6-L10) ([L6](../../boot/main/boot.py#L6)), fix the `sys.path`
-   sanitization and drop the `""` entry:
+   and add `src/config.py`, which
+   [manifests/disco.py:2](../../manifests/disco.py#L2) freezes via `../src`. The
+   frozen file does not win on its own: while CWD is `/qspi`, a `/qspi/config/`
+   directory shadows it (see Scope constraints). Step 2 is required.
+   `except ImportError:` is not a security control. A planted module runs during
+   the import, before anything can raise. The narrower clause only stops a
+   broken override from being hidden.
+2. At the top of [boot.py:1-10](../../boot/main/boot.py#L1-L10) ([L1](../../boot/main/boot.py#L1)),
+   before `import os` and `import time`, pin `sys.path` to `[""]` and move CWD
+   to the empty VFS root. `sys` and `uos` are built-ins and do not search the
+   path. Slice assignment is enabled
+   ([mpconfigport.h:112](../../f469-disco/micropython/ports/stm32/mpconfigport.h#L112)).
 
    ```diff
-    # Clean sys.path from qspi
-    # Shouldn't happen in production, but just in case.
+    # boot.py -- run on boot-up
+    # can run arbitrary Python, but best to keep it minimal
+   +import sys, uos
+   +# keep "": frozen modules match bare names only
+   +# "/" is the VFS root; nothing is mounted there
+   +sys.path[:] = [""]
+   +uos.chdir("/")
+   +
+    import pyb, os, micropython, time
+   -import sys
+   -
+   -# Clean sys.path from qspi
+   -# Shouldn't happen in production, but just in case.
    -for p in sys.path:
    -    if "qspi" in sys.path:
    -        sys.path.remove(p)
-   +sys.path[:] = [p for p in sys.path if p and "qspi" not in p]
+    
+    # power hold
    ```
-3. Chdir to a non-persistent location before any import runs.
-4. Add a boot-time assertion that every security-relevant module resolved to a
-   frozen path (`__file__` absent on frozen modules is a usable signal).
+
+   F-32 step 1 edits the same lines. Merge them: these lines first, then the
+   USB-off lines, before `import pyb, os, …`. Checked against source only; not
+   run on the unix port or on a device.
+3. Keep CWD off persistent volumes. Step 2 covers `boot.py` and the top of
+   `main.py`. [main.py:27-31](../../src/main.py#L27-L31) later moves CWD to
+   `/ramdisk/cwd`, a RAM volume formatted each boot
+   ([platform.py:143-145](../../src/platform.py#L143-L145)); keep it empty.
+4. Assert `sys.path == [""]` and `uos.getcwd() == "/"` before the first
+   non-built-in import. `__file__` is not a usable signal: frozen modules get
+   the bare frozen name
+   ([builtinimport.c:136-138](../../f469-disco/micropython/py/builtinimport.c#L136-L138),
+   [builtinimport.c:151-153](../../f469-disco/micropython/py/builtinimport.c#L151-L153)),
+   and a CWD file loaded through `""` gets the same relative name.
 
 ---
 
@@ -2948,8 +3238,13 @@ native code.
   touch events feed CPU timing and coordinates into it.
 - **Default reachability:** `MICROPY_HW_ENABLE_RNG` is `(1)` for
   `STM32F469DISC`, so this is the real path. `os.urandom` is the only hardware
-  entropy source for `src/rng.py`, which feeds mnemonic generation, the software
-  pool, and Liquid blinding nonces.
+  entropy source for `src/rng.py`, which feeds the software pool, the mnemonic,
+  the device and enc secrets, AEAD IVs, secure-channel ephemeral keys, and the
+  `getrandom` app. Liquid blinding does not use it: blinders and rangeproof
+  nonces derive from the host-supplied txseed
+  ([manager.py:256-260](../../src/apps/wallets/liquid/manager.py#L256-L260) ([L256](../../src/apps/wallets/liquid/manager.py#L256))).
+  Without a txseed the device generates no blinders and only verifies the host's
+  commitments ([manager.py:534-538](../../src/apps/wallets/liquid/manager.py#L534-L538) ([L534](../../src/apps/wallets/liquid/manager.py#L534))).
 - **Impact on funds:** If the TRNG failure persists and the pool state is fully
   known, mnemonic generation is deterministic and an attacker can reproduce every
   derived key. A transient failure does not erase pool entropy: if even one touch
@@ -3012,11 +3307,14 @@ def get_random_bytes(nbytes):
     feed(d)
 ```
 
-Every seed- and key-generating caller goes through it:
+Every seed-, key-, and IV-generating caller goes through it:
 [helpers.py:25](../../src/helpers.py#L25) (mnemonic),
+[helpers.py:41](../../src/helpers.py#L41) (AEAD IV),
 [ram.py:158](../../src/keystore/ram.py#L158) and
 [flash.py:148,183](../../src/keystore/flash.py#L148) (device/enc secrets),
-[securechannel.py:82](../../src/keystore/javacard/applets/securechannel.py#L82).
+[securechannel.py:82](../../src/keystore/javacard/applets/securechannel.py#L82)
+(secure-channel ephemeral key), and
+[getrandom.py:42](../../src/apps/getrandom.py#L42) (host `getrandom`).
 16 unit tests in
 [test/tests_native/test_rng.py](../../test/tests_native/test_rng.py) cover the
 partial-stall, majority-stall, low-variety, short-buffer, and >64-byte paths.
@@ -3049,39 +3347,90 @@ check. Refuse to generate a mnemonic if it fails.
 
 1. Fix the driver in the fork. In
    [rng.c:29-55](../../f469-disco/micropython/ports/stm32/rng.c#L29-L55) ([L29](../../f469-disco/micropython/ports/stm32/rng.c#L29)),
-   `rng_get()` should signal failure rather than return `0`:
+   `rng_get()` should signal failure rather than return `0`, and check
+   `SECS`/`CECS` on every poll, so a seed or clock error during the wait is not
+   reported as a timeout. `os_urandom`
+   ([moduos.c:101-109](../../f469-disco/micropython/ports/stm32/moduos.c#L101-L109) ([L101](../../f469-disco/micropython/ports/stm32/moduos.c#L101)))
+   clears the error on entry and raises on the first failed word:
 
    ```diff
-    #if MICROPY_HW_ENABLE_RNG
-    
-    #define RNG_TIMEOUT_MS (10)
+   --- a/ports/stm32/rng.h
+   +++ b/ports/stm32/rng.h
+    uint32_t rng_get(void);
    +
    +#define RNG_ERR_TIMEOUT (1)
    +#define RNG_ERR_SEED_OR_CLOCK (2)
+   +
+   +// Set by rng_get() on failure. Only the caller clears it.
+   +extern volatile uint32_t rng_last_error;
+    
+    MP_DECLARE_CONST_FUN_OBJ_0(pyb_rng_get_obj);
+   --- a/ports/stm32/rng.c
+   +++ b/ports/stm32/rng.c
+    #if MICROPY_HW_ENABLE_RNG
+    
+    #define RNG_TIMEOUT_MS (10)
    +
    +volatile uint32_t rng_last_error = 0;
     
     uint32_t rng_get(void) {
         ...
+        // Wait for a new random number to be ready, takes on the order of 10us
         uint32_t start = HAL_GetTick();
-        while (!(RNG->SR & RNG_SR_DRDY)) {
+   -    while (!(RNG->SR & RNG_SR_DRDY)) {
+   +    for (;;) {
+   +        // one SR read per pass, so the error and ready checks see the same state
+   +        uint32_t sr = RNG->SR;
+   +        if (sr & (RNG_SR_SECS | RNG_SR_CECS)) {
+   +            rng_last_error = RNG_ERR_SEED_OR_CLOCK;
+   +            return 0;
+   +        }
+   +        if (sr & RNG_SR_DRDY) {
+   +            break;
+   +        }
             if (HAL_GetTick() - start >= RNG_TIMEOUT_MS) {
    +            rng_last_error = RNG_ERR_TIMEOUT;
                 return 0;
             }
         }
-   +    if (RNG->SR & (RNG_SR_SECS | RNG_SR_CECS)) {
-   +        rng_last_error = RNG_ERR_SEED_OR_CLOCK;
-   +        return 0;
-   +    }
     
         // Get and return the new random number
         return RNG->DR;
     }
+   --- a/ports/stm32/moduos.c
+   +++ b/ports/stm32/moduos.c
+    #include "py/runtime.h"
+   +#include "py/mperrno.h"
+    #include "py/objtuple.h"
+    ...
+    STATIC mp_obj_t os_urandom(mp_obj_t num) {
+        mp_int_t n = mp_obj_get_int(num);
+        vstr_t vstr;
+        vstr_init_len(&vstr, n);
+   +    rng_last_error = 0;
+        for (int i = 0; i < n; i++) {
+            vstr.buf[i] = rng_get();
+   +        if (rng_last_error) {
+   +            vstr_clear(&vstr);
+   +            mp_raise_OSError(MP_EIO);
+   +        }
+        }
+        return mp_obj_new_str_from_vstr(&mp_type_bytes, &vstr);
+    }
    ```
 
-   Have `os_urandom` raise `OSError` when `rng_last_error` is set, and consume
-   full 32-bit words rather than one word per byte.
+   The context applies with `patch` to the current rng.h, rng.c and moduos.c
+   (with `...` expanded). A host mock of the loop gives: normal read, no error;
+   stuck `DRDY`, timeout; `SECS` during the wait, seed/clock error; `DRDY` with
+   `CECS`, seed/clock error. Not built with the ARM toolchain or run on
+   hardware. `SECS`/`CECS` report only the current state; the sticky
+   `SEIS`/`CEIS` bits would also catch a short error, but need clearing and an
+   `RNGEN` restart to recover. `pyb.rng()` and `machine.rng()` still ignore
+   `rng_last_error`; no `src/` code uses them.
+
+   `os_urandom` should also consume full 32-bit words rather than one word per
+   byte. `get_random_bytes` in `src/rng.py` does not catch `OSError`; map it to
+   `RNGError` so callers see one error type.
 2. Expose `pyb.rng_health()` so `src/rng.py` can check the peripheral directly
    instead of inferring from output statistics.
 3. Replace the constant pool seed `b"7" * 64`
@@ -3143,14 +3492,16 @@ scrolling. The fee is not. Its vertical position, and that of every per-output
 gap-limit and watch-only warning, is a function of the attacker-chosen output
 count. Each non-change output consumes roughly 180-200 px — a 28 pt value line,
 an optional label, a wrapped address at three lines of 28 pt mono, plus 30 px
-and 10 px margins — against a visible page height of about 640 px.
+and 10 px margins — against a visible page height of `670 - lbl.get_y()` px
+([transaction.py:32](../../src/gui/screens/transaction.py#L32); exact value to be
+measured on device).
 Three outputs fill the viewport. Ten push the fee and every per-output warning
 well below it.
 
 **What this does not affect**
 
 "Unknown wallet in inputs!"
-([manager.py:384](../../src/apps/wallets/manager.py#L384)), the
+([manager.py:384-397](../../src/apps/wallets/manager.py#L384-L397)), the
 already-signed warning (`manager.py:348`), and the sighash prompt are
 separate blocking `Prompt` screens shown before the transaction screen. Those
 cannot be scrolled away, although their own body text has the same fixed-button
@@ -3198,24 +3549,46 @@ output list.
 1. Cheapest effective change: move the fee and the aggregated warning block out
    of `self.page` and into fixed screen-level labels above the button pair, so
    they cannot be scrolled off.
-2. Stronger: disable Confirm until the page has been scrolled to the end. Add
-   a handler after `Prompt.__init__` in
-   [prompt.py:42-43](../../src/gui/screens/prompt.py#L42-L43) ([L42](../../src/gui/screens/prompt.py#L42)):
+2. Stronger: disable Confirm until the main page has been scrolled to the end.
+   LVGL v6.0 never sends `VALUE_CHANGED` on page scroll. The scrollable's
+   default callback forwards only press, click and drag events to the page
+   ([lv_page.c:1077-1089](../../f469-disco/usermods/udisplay_f469/lvgl/src/lv_objx/lv_page.c#L1077-L1089)). Use `DRAG_END` on the scrollable
+   instead. LVGL sends it after a drag throw has come to rest
+   ([lv_indev.c:1211-1223](../../f469-disco/usermods/udisplay_f469/lvgl/src/lv_core/lv_indev.c#L1211-L1223)), so the final position is known.
+   Sketch for `Prompt`:
 
-   ```diff
-                # Align warning icon to the left of the title
-                self.icon.align(self.title, lv.ALIGN.IN_LEFT_MID, 90, 0)
-   +
-   +    def _on_scroll(self, obj, event):
-   +        if event == lv.EVENT.VALUE_CHANGED:
-   +            at_end = (self.page.get_scrl().get_y() + self.page.get_scrl().get_height()
-   +                      <= self.page.get_height() + 4)
-   +            if at_end:
-   +                self.confirm_button.set_state(lv.btn.STATE.REL)
+   ```python
+   def gate_confirm(self):
+       # call once the page content is final
+       self._seen_end = False
+       self.page.get_scrl().set_event_cb(self._on_scrl_event)
+       self._check_end()
+
+   def _on_scrl_event(self, obj, event):
+       # replaces scrl_def_event_cb, so keep forwarding events to the page
+       lv.event_send(self.page, event, None)
+       if event == lv.EVENT.DRAG_END:
+           self._check_end()
+
+   def _check_end(self):
+       scrl = self.page.get_scrl()
+       if scrl.get_y() + scrl.get_height() <= self.page.get_height() + 4:
+           self._seen_end = True
+       self.confirm_button.set_state(
+           lv.btn.STATE.REL if self._seen_end else lv.btn.STATE.INA)
    ```
 
-   Start the button in `lv.btn.STATE.INA` when the content overflows the
-   viewport.
+   - Call `gate_confirm()` only after the content is final. `TransactionScreen`
+     fills `self.page` after `Prompt.__init__` returns, so an overflow check
+     inside `Prompt.__init__` sees an empty page.
+   - `_seen_end` latches: scrolling back up does not re-disable Confirm. Content
+     that fits without scrolling enables Confirm at once.
+   - `page2` ([transaction.py:34-36](../../src/gui/screens/transaction.py#L34-L36))
+     is a second scrolling page for the details view. Register the same callback
+     on it if its content must also be reviewed. Toggling the details switch
+     must not change the gate by itself.
+   - Test on device: the binding names (`lv.event_send`, `lv.EVENT.DRAG_END`,
+     `lv.btn.STATE.INA`), the 4 px tolerance, and the event sequence.
 3. Cap or paginate the output list on the default page, and count the outputs
    the change filter skips at
    [transaction.py:73-79](../../src/gui/screens/transaction.py#L73-L79) ([L73](../../src/gui/screens/transaction.py#L73)) so
@@ -4085,12 +4458,13 @@ and make Cancel the affirmative button.
   for the affected sectors.
 - **Default reachability:** The default and only SD upgrade path automatically
   processes a root-level `specter_upgrade*.bin` with no PIN and no confirmation.
-- **Impact on funds:** No direct loss. The deterministic result is permanent
-  clearing of WRP for the target region plus destruction of installed firmware,
-  which supplies the flash-write prerequisite F-25 needs.
+- **Impact on funds:** No direct loss. The deterministic result is persistent
+  clearing of WRP for the target region, until the next successful signed
+  upgrade, plus destruction of installed firmware. This supplies the
+  flash-write prerequisite F-25 needs.
 - **Security property violated:** Hardware protection removed for an operation
   must be restored if authorization fails, and unauthenticated input must not
-  permanently weaken the device.
+  persistently weaken the device.
 
 **Evidence and ordering**
 
@@ -4100,7 +4474,7 @@ and make Cancel the affirmative button.
 | `bootloader.c:1231-1234` | Clear WRP option bytes | No |
 | `bootloader.c:1237-1244` | Erase and write flash | No |
 | `bootloader.c:1248-1251` | Hash bytes back from flash | No |
-| `bootloader.c:1255-1263` | Verify multisignature | First authenticity check |
+| `bootloader.c:1254-1263` | Verify multisignature | First authenticity check |
 | `bootloader.c:1266-1269` | Create integrity records | Success only |
 | `bootloader.c:1271-1277` | Restore WRP | Success only, and compile-time gated |
 
@@ -4116,8 +4490,16 @@ The change is persistent option-byte programming.
 ([bl_syscalls.c:711-742](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L711-L742) ([L711](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L711))),
 which commits through `HAL_FLASHEx_OBProgram` and `HAL_FLASH_OB_Launch`
 ([bl_syscalls.c:598-629](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L598-L629) ([L598](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L598))).
-The signature-failure alert is terminal and waits for power-down, so it cannot
-fall through to the restore. The bootloader GUI has no input or confirmation API,
+The signature-failure alert uses `BL_FOREVER` and never returns: it calls the
+`noreturn` `blsys_wait_power_down()`
+([bl_syscalls.c:245](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L245),
+[bl_syscalls.c:882-884](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L882-L884)).
+So the device powers off with WRP cleared, and the `return false` at
+bootloader.c:1262 is unreachable. At boot, `blsys_init()` reprotects only the
+start-up sector
+([bl_syscalls.c:352-358](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L352-L358)),
+so the target region stays unprotected until the next successful signed
+upgrade. The bootloader GUI has no input or confirmation API,
 and the failure screen does not disclose the resulting WRP state.
 
 **Attack trace**
@@ -4129,8 +4511,8 @@ payload-CRC checks pass. WRP is cleared. Attacker bytes replace the firmware. Th
 signature count is zero. The device halts with WRP still cleared.
 
 PATH-23 explains why those unverified bytes do not execute by themselves. The
-security impact is the permanent removal of the hardware control that F-25 relies
-on.
+security impact is the persistent removal of the hardware control that F-25
+relies on, until the next successful signed upgrade.
 
 **Why existing checks do not prevent it**
 
@@ -4151,10 +4533,11 @@ if (!set_write_protection_state(&bl_ctx.file_metadata, p_args->loaded_from, fals
 }
 ```
 
-Then erase (1237), copy (1242), hash (1247), and only at
+Then erase (1237), copy (1242), hash (1248), and only at
 [bootloader.c:1254-1263](../../bootloader/core/bootloader.c#L1254-L1263) ([L1254](../../bootloader/core/bootloader.c#L1254)) does
-`verify_multisig` run — whose failure branch does `return false` **without**
-restoring WRP. The restore at
+`verify_multisig` run. Its failure branch shows a `BL_FOREVER` alert, which
+never returns, so the device powers off **without** restoring WRP. The
+`return false` at 1262 is unreachable. The restore at
 [bootloader.c:1271-1277](../../bootloader/core/bootloader.c#L1271-L1277) ([L1271](../../bootloader/core/bootloader.c#L1271)) is
 reachable only on the success path.
 
@@ -4219,8 +4602,20 @@ erase-and-copy stage. Report protection state on failure.
       // Notify the user that upgrade is complete
    ```
 
-   Audit every other early `return` and `fatal_error` between the unprotect and
-   the restore for the same problem.
+   The diff moves the restore ahead of the signature-failure alert. It applies
+   verbatim to the current source. A scratch copy of `bootloader.c` with the
+   diff compiles with `-Wall -Werror` and the unit-test defines, both with and
+   without `WRITE_PROTECTION`. Two gaps remain after it:
+
+   - (a) The restore is still under `#ifdef WRITE_PROTECTION`, while the
+     unprotect at 1231-1234 is not. Step 3 covers this.
+   - (b) The `fatal_error` paths at 1237-1251 (erase, copy, hash) and 1268
+     (integrity records) still skip the restore. `fatal_error` is `noreturn`
+     ([bootloader.c:183-193](../../bootloader/core/bootloader.c#L183-L193)) and
+     ends in `blsys_fatal_error`
+     ([bl_syscalls.c:863](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L863)).
+     Restore WRP inside a cleanup handler that runs before these, or rely on
+     step 3.
 2. Better: verify the file's signature **before** touching WRP, then verify
    again from flash after the copy. The first check costs one extra hash pass and
    removes the attacker's ability to clear WRP with an unsigned card at all. The
@@ -4402,8 +4797,9 @@ T=1 timing with a smartcard emulator under the release toolchain.
   record so that `LWalletManager.get_address` takes the confidential branch.
 - **Default reachability:** Every Liquid PSET output that carries a blinding
   pubkey and whose scriptPubKey is not p2sh takes the affected branch. The
-  misleading result occurs whenever that scriptPubKey is not one of the five
-  canonical types.
+  misleading result occurs whenever that scriptPubKey is not
+  p2sh/p2wpkh/p2wsh/p2tr. p2pkh, and any script whose first byte modulo `0x50`
+  is 32 or more, aborts with `IndexError` instead (H-25).
 - **Impact on funds:** The device renders a well-formed confidential address for
   a scriptPubKey that has no address representation, and renders several distinct
   scriptPubKeys as one identical address. So an approved payment can commit to a
@@ -4459,13 +4855,19 @@ def decode(hrp, addr):
 
 The strict `bech32.decode` used on the Bitcoin path
 ([bech32.py:121-137](../../f469-disco/libs/common/embit/src/embit/bech32.py#L121-L137) ([L121](../../f469-disco/libs/common/embit/src/embit/bech32.py#L121)))
-keeps all four checks, so `bech32.encode` really does fail closed. `blech32` does
+keeps those three checks plus a Bech32/Bech32m encoding check, so
+`bech32.encode` really does fail closed. `blech32` does
 not, which is why the confidential branch is the reachable one.
 
 **Attack trace**
 
-Run against the vendored modules with a fixed 33-byte blinding pubkey `02` +
-`11`×32 and the `liquidv1` network:
+Run in CPython against the vendored modules with the `liquidv1` network.
+`02` + `11`×32 is not a valid point (`ec.PublicKey.parse` raises), so the
+blinding key is a stub whose `sec()` returns those 33 bytes; `addresses.address`
+only calls `sec()`. Every 32-byte program is `bytes(range(32))` (`00 01 … 1f`),
+`6a14` pushes `bytes(range(20))`, and `0029` pushes 41 zero bytes. With the
+generator `G` as a real key the four scripts still collide, on
+`lq1pqfumuen7l8…9q4zct3sxg6rvwp68sl7km8wpu8lrj9`.
 
 ```
 spk 5120…  script_type=p2tr  -> lq1pqgg3zyg…9q4zct3sxg6rvwp68slmqn394jzud3c
@@ -4481,7 +4883,15 @@ spk f120…  script_type=None  -> lq1pqgg3zyg…9q4zct3sxg6rvwp68slmqn394jzud3c
 
 The same three scripts on the *unconfidential* Liquid branch, which uses the
 strict `bech32.encode`, return `None`. That confirms the disabled `blech32`
-validation is what makes the confidential branch permissive.
+validation is what makes the confidential branch accept them.
+
+The collision is different. `0120…`, `a120…`, and `f120…` reduce to a valid
+version-1, 32-byte program, so the unconfidential branch also returns the
+`5120…` string `ex1pqqqsyqcyq5rqwzqfpg9scrgwpugpzysnzs23v9ccrydpk8qarc0s5mqwny`,
+and the corrected `blech32` checks accept them too. Fix 2 is required. The
+unconfidential branch is not reached from `src/`: unconfidential outputs go
+through the gated `Script.address`
+([liquid/manager.py:76](../../src/apps/wallets/liquid/manager.py#L76)).
 
 **Why existing checks do not prevent it**
 
@@ -4526,9 +4936,10 @@ condition.
 has the `ver = ver % 0x50` reduction with the `FIXME` intact, and the round-trip
 guard is inert because
 [blech32.py:112-124](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L112-L124) ([L112](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L112))
-has all four validation checks commented out. The strict `bech32.decode` used on
-the Bitcoin path retains them, which is why only the confidential branch is
-permissive. The unguarded call site is
+has all three validation checks commented out. The strict `bech32.decode` used
+on the Bitcoin path retains them, which is why only the confidential branch
+accepts OP_RETURN and bad program lengths. The `0120…`/`a120…`/`f120…` collision
+passes both decoders. The unguarded call site is
 [liquid/manager.py:70-74](../../src/apps/wallets/liquid/manager.py#L70-L74) ([L70](../../src/apps/wallets/liquid/manager.py#L70)),
 which calls `liquid_address` before the Bitcoin manager's `try/except` hex
 fallback at [manager.py:102](../../src/apps/wallets/manager.py#L102) is
@@ -4536,8 +4947,10 @@ reachable.
 
 **Recommended fix**
 
-1. Restore the four commented-out checks in `blech32.decode`. They cost nothing
-   and re-arm the round-trip guard in `blech32.encode`.
+1. Restore the three commented-out checks in `blech32.decode`, with the length
+   bounds shifted for the 33-byte blinding-key prefix. They re-arm the
+   round-trip guard in `blech32.encode`. They do not stop the collision; fix 2
+   does.
 2. Gate `addresses.address` on `Script.script_type()` the way `Script.address`
    does, and raise for anything else instead of reducing `data[0]` modulo `0x50`.
 3. Replace `ver = data[0] % 0x50` with an explicit OP_N decode that accepts only
@@ -4548,7 +4961,7 @@ reachable.
 
 **Action plan**
 
-1. Uncomment the four checks in `blech32.decode` in
+1. Restore the three checks in `blech32.decode`, with shifted bounds, in
    [liquid/blech32.py:117-124](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L117-L124) ([L117](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L117)):
 
    ```diff
@@ -4559,17 +4972,25 @@ reachable.
    -    #     return (None, None)
    -    # if data[0] == 0 and len(decoded) != 20 and len(decoded) != 32:
    -    #     return (None, None)
-   +    if decoded is None or len(decoded) < 2 or len(decoded) > 40:
+   +    if decoded is None or len(decoded) < 35 or len(decoded) > 73:
    +        return (None, None)
    +    if data[0] > 16:
    +        return (None, None)
-   +    if data[0] == 0 and len(decoded) != 20 and len(decoded) != 32:
+   +    if data[0] == 0 and len(decoded) not in (53, 65):
    +        return (None, None)
         return (data[0], decoded)
    ```
 
-   Note the confidential payload is `blinding_key.sec() + program`, so the
-   length bounds must account for the 33-byte prefix on the blech32 side.
+   The confidential payload is `blinding_key.sec() + program`: 33 + 2-40 =
+   35-73 bytes, and 33 + 20 = 53 or 33 + 32 = 65 for version 0. Uncommenting
+   the original bounds verbatim rejects every confidential address. Tested in
+   CPython: p2wpkh (53), p2wsh (65), and p2tr (65) still encode; `6a14…`,
+   `0002aabb`, and `0029<41B>` return `None`; the collision is unchanged.
+   Fix 2 alone (the diff below, `blech32` unpatched) keeps p2sh, p2wpkh, p2wsh
+   and p2tr byte-identical and raises `ValueError` for `0120…`, `a120…`,
+   `f120…`, `6a14…`, `0002aabb`, `0029…` and p2pkh on both branches.
+   Fixes 1 and 2 turn the misleading display into an exception or `None`;
+   step 3 is needed to render it gracefully.
 2. Gate `addresses.address` on script type and decode OP_N explicitly in
    [liquid/addresses.py:19-24](../../f469-disco/libs/common/embit/src/embit/liquid/addresses.py#L19-L24) ([L19](../../f469-disco/libs/common/embit/src/embit/liquid/addresses.py#L19)),
    resolving the `FIXME`:
@@ -7524,7 +7945,7 @@ Confidence: High for the current pin.
 
 ### 10.1 Questions static inspection did not close
 
-- exploit behavior of F-10 and F-31 at the target MicroPython/native boundary;
+- exploit behavior of F-31 at the target MicroPython/native boundary;
 - GUI visibility, scrolling, and exact rendered text on LVGL;
 - TRNG fault behavior, nonce side channels, RDP1 extraction, and RAM/SDRAM
   remanence on physical hardware;
@@ -7553,8 +7974,9 @@ Confidence: High for the current pin.
    unverified amount becomes fatal.
 6. Attempt derived-key signing when the derived public key is absent from every
    applicable input script.
-7. Differentially fuzz `InputScope` and `PSBTView` boundaries, starting with the
-   demonstrated `non_witness_utxo` desynchronization.
+7. Differentially fuzz `InputScope` and `PSBTView` boundaries. Start with a
+   regression for the `non_witness_utxo` desynchronization fixed in `ff98e0f`
+   (F-10).
 8. Verify Liquid input generators and Pedersen commitments, and test mismatched
    proprietary fields.
 9. Assert that a `signmessage` request whose message parses as a bootloader
@@ -7653,7 +8075,8 @@ Still to do:
 
 1. Establish whether `embit` upstream has fixed F-04, F-10, F-35, or F-36, to
    set the embargo clock for the coordinated disclosure in §12.2. The pinned
-   v0.8.2 does not fix any of them.
+   fork fixes F-10 (`ff98e0f`); whether upstream carries that commit is
+   unverified.
 2. Fetch official release metadata, signatures, and binaries. Run two
    clean `linux/amd64` Docker builds from this exact tree, compare their main
    firmware, bootloader, initial-firmware, and unsigned-upgrade hashes, then
@@ -7697,7 +8120,7 @@ prerequisite or coverage limit that static inspection did not settle.
 | Compromised build environment | Inject key-stealing code into compiler output or generated firmware, then present its opaque firmware hash to release-key holders for threshold authorization. F-08 also means the finished artifact does not record which key set established its trust root. | **Partly, but not reliably detected.** Two release signatures are still required, but F-17's signing UI does not bind approval to reviewed source or recognizable binary content. The Docker build appears deterministic by inspection, but no two clean builds and no official-release comparison were performed, so independent detection is unverified. |
 | Malicious transaction | Request `NONE \| ANYONECANPAY` and later transplant the approved input signature into an arbitrary payment (F-30). Or rely on F-24 and F-19: present many outputs so the fee and every per-output warning sit below the fold while Confirm stays pressable. | **No.** F-30 is a blank-cheque path gated only by a generic warning and user approval, and the confirmation screen does not reliably show the data that would make an unusual transaction recognizable. |
 | Malicious wallet descriptor | Ask the user to import a policy in which an attacker key can satisfy the spending threshold, then steal funds deposited to that policy. After import, the ownership path re-derives the descriptor and overwrites host-supplied scripts, which prevents later script substitution (PATH-02). | **Partly.** The implementation prevents the post-import script-spoofing path and identifies device, external, and NUMS keys during confirmation. It cannot prevent theft when the user approves an attacker-spendable policy. Script and address-encoding safety is established for Bitcoin (PATH-34 to PATH-37) but not for the Liquid confidential encoder (F-35). Full Miniscript and TapTree safety is not established. |
-| Malformed Bitcoin data | F-10 shows declared-length parser desynchronization in `non_witness_utxo` with unresolved target impact. Version-incompatible scope fields are rejected (PATH-41). | **Partly.** The version-consistency class is closed in the parser, though only there and with no test pinning it here (H-27). No reviewed malformed Bitcoin path independently established code execution; F-31 is the separate malformed-Liquid result. |
+| Malformed Bitcoin data | F-10 showed declared-length parser desynchronization in `non_witness_utxo`; embit `ff98e0f` fixes it. Version-incompatible scope fields are rejected (PATH-41). | **Partly.** The version-consistency class is closed in the parser, though only there and with no test pinning it here (H-27). No reviewed malformed Bitcoin path independently established code execution; F-31 is the separate malformed-Liquid result. |
 
 ### 11.1 Final security questions
 
@@ -7717,7 +8140,7 @@ prerequisite or coverage limit that static inspection did not settle.
 | Can signatures or secret-derived material be obtained outside transaction confirmation? | **Yes, four ways.** Xpub and fingerprint with **no** confirmation (F-05). Up to 1000 raw TRNG bytes with **no** confirmation (F-14). A message signature at any path with one confirmation whose contents the host can partly hide (F-21). The SLIP-77 master blinding key with one confirmation. |
 | Can a message signature be reused as a transaction signature? | No for Bitcoin or Liquid consensus data. The 25-byte domain prefix sits exactly where a sighash preimage keeps hash output, so a collision needs about 2^168 work, and the length prefix covers the exact bytes hashed. **But the same prefix is deliberately shared with firmware authorization (F-17)**, so a message signature can be a valid firmware signature, which is a higher-value target than a transaction. |
 | Can a host obtain a signature at a derivation path the user did not intend? | **Yes.** F-04: derived keys are signed with no script-membership check, under any host-chosen path, over a sighash the host builds. A confirmation is shown, but it shows a transaction the user does not recognize as theirs. |
-| Can secure-element replacement bypass PIN or force weaker fallback? | **Yes.** A card reporting `PIN_UNLOCKED` suppresses the PIN and anti-phishing screen (F-22). An attacker card can inject a constant-key seed (F-07). Faults can force the weaker or destructive fallback (H-14). Card-controlled UART bytes reach native memory corruption before PIN entry (F-34). No path extracted the genuine card's existing seed. |
+| Can secure-element replacement bypass PIN or force weaker fallback? | **Yes.** A card reporting `PIN_UNLOCKED` suppresses the PIN and anti-phishing screen (F-22). An attacker card can inject a constant-key seed (F-07); with `PIN_UNLOCKED` the load needs an extra storage-menu step (F-22). Faults can force the weaker or destructive fallback (H-14). Card-controlled UART bytes reach native memory corruption before PIN entry (F-34). No path extracted the genuine card's existing seed. |
 | Can Liquid sign or disclose something Bitcoin would prevent? | **Yes.** The same root serves both networks. Liquid exposes the master blinding key (H-03, H-21), displays unverified amounts and host labels (F-11, F-23), renders addresses that do not identify the script being signed because its encoder lacks the script-type gate the Bitcoin encoder has (F-35 versus PATH-35), and its streaming rangeproof path adds pre-confirmation memory corruption (F-31). Whether a Liquid sighash can equal a Bitcoin sighash was not analysed. |
 | Do vendored or submodule trees have unexplained upstream divergence? | **Unresolved, and not currently answerable from the repository.** Two positives: the checked-in secp256k1 generator table was recomputed entry by entry and matches, and all 63 MicroPython fork-only commits were reviewed. Against that, six of eight submodule URLs point at forks under one GitHub org and carry `branch =` declarations, and nothing in the tree records how those pins relate to upstream (§1.2, PATH-18). **D-02 adds** several large native trees flattened inside the MicroPython fork with no recorded upstream SHA, so their provenance cannot be reconstructed at all. No evidence of tampering was found anywhere it could be checked; this is a provenance gap, not a tampering result. |
 | Could a malicious contributor add covert exfiltration that survives the build? | **Not ruled out.** Strong hiding places include `mpy-cross -O` removing assert validation (H-13), writable-path import resolution (F-15), warning removal (H-22), and provenance-free dependency flattening (D-02). The repository has no CI or CODEOWNERS control at this tag, and empirical release reproduction is absent. |
@@ -7766,13 +8189,13 @@ prerequisite or coverage limit that static inspection did not settle.
 11. **Medium, and cheap.** Make TRNG failure fatal before seed generation
     (F-18), and refuse dangerous sighash modes rather than relying on a generic
     warning (F-30).
-12. **Medium, and cheap.** Restore the four commented-out validity checks in
-    `liquid/blech32.py` and gate `liquid/addresses.py` on `Script.script_type()`
-    (F-35). One change closes F-35, F-36, and H-25, and it restores the property
+12. **Medium, and cheap.** Restore the three commented-out validity checks in
+    `liquid/blech32.py`, with bounds shifted for the 33-byte key prefix, and
+    gate `liquid/addresses.py` on `Script.script_type()` (F-35). One change closes F-35, F-36, and H-25, and it restores the property
     that a displayed Liquid address identifies exactly one scriptPubKey. Label hex
     fallbacks on the confirmation screen as unrecognized output scripts in the
     same pass.
-13. **Medium and Low.** Bound PSBT values (F-10). Verify UR checksums and
+13. **Medium and Low.** Bound PSBT values (F-10, done in embit `ff98e0f`). Verify UR checksums and
     characters (F-28, H-08). Repair QR framing (F-16). Fail closed in crypto
     callbacks (F-13). Harden entropy export (F-14). Fix truthiness, channel-IV,
     backup-name, network-file, and assert-validation issues (H-06, H-10, H-11,
@@ -7806,8 +8229,8 @@ return value in `manager.py`. This repository is one consumer of that library,
 so the remediation owner and the disclosure path differ from the rest of this
 report:
 
-- Handle **F-04 and F-10** as a coordinated disclosure to the `embit`
-  maintainers first, on normal embargo terms, before any public Specter-DIY
+- Handle **F-04** (and **F-10**, if upstream does not already carry `ff98e0f`)
+  as a coordinated disclosure to the `embit` maintainers first, on normal embargo terms, before any public Specter-DIY
   writeup. Every downstream consumer of the same code is affected the same way,
   not only Specter-DIY. Check whether upstream has already fixed them before
   setting the embargo clock.
@@ -7987,11 +8410,11 @@ In priority order:
    pins the v2-field rejection that PATH-41 rests on, so a future submodule bump
    can retire it silently (H-27). Cover crafted v0 PSBTs carrying each v2-only
    key in every field order, including duplicate `0x0f` records.
-5. **Open coordinated disclosure with the `embit` maintainers** for F-04 and
-   F-10, and establish first whether the fork this tree pins matches upstream
+5. **Open coordinated disclosure with the `embit` maintainers** for F-04, and
+   for F-10 only if upstream lacks `ff98e0f`. Establish first whether the fork this tree pins matches upstream
    (PATH-18). F-03 is this repository's own defect, not upstream's.
 6. **Route F-35 and F-36 to the `embit` maintainers together with the PSBT
-   items.** Restoring the four commented-out checks in `blech32.decode` and adding
+   items.** Restoring the three commented-out checks in `blech32.decode` and adding
    a `script_type()` gate to `addresses.address` closes F-35, F-36, and H-25 in
    one change. Then take the *taproot output-key tweak* and Miniscript/TapTree
    script construction to Deep, since those determine the `p2tr` program this
@@ -8093,103 +8516,13 @@ misleading or incomplete. **REF** — a wrong line reference.
   Confirmed. Proposed status: "Partially resolved". The forged separator, the
   unbounded path, and the `m/86h` address mapping are still open.
 
-- [ ] **F-10 status "Plausible".** The fix is in the pinned embit (`b2e606b`
-  includes `ff98e0f`; psbt.py:334-345). Proposed status: "Resolved (embit
-  `ff98e0f`)".
-
 ### 15.2 High
 
 Empty now
 
 ### 15.3 Medium
 
-**F-07**
-- [ ] REF — `ram.py:302` is `def get_pin`. `get_auth_word` is passed at
-  ram.py:311, 331, 339.
-- [ ] BREAKS — step 1: calling `_check_card_identity()` only in `init` misses
-  reconnects, because `close()` clears `card_pubkey` (securechannel.py:201) and
-  `check_card` (memorycard.py:316-328) re-fetches it. It also breaks the "Use
-  a different card" flow (memorycard.py:406-422). Call it in `check_card` after
-  `open_secure_channel()`, and make card switching an explicit re-pair step.
-- [ ] UNCLEAR — Attack trace: the F-22 caveat applies (with `PIN_UNLOCKED` the
-  load step does not follow automatically).
-
-**F-10**
-- [ ] See §15.1 for the status.
-- [x] STALE — Evidence "copies … desynchronized scope" is present tense. It is
-  now rejected upstream (manager.py:947-956).
-- [x] STALE — the diff context uses pre-fix names. Replace it with "Applied in
-  `ff98e0f`; see psbt.py:328-346."
-- [x] WRONG — "`read_vout` may legitimately stop early": it reads through the
-  witnesses and locktime (transaction.py:118-149). Delete the sentence.
-- [x] STALE — step 2: embit `tests/tests/test_parsing.py:150`
-  (`test_non_witness_boundary`) covers boundaries, but it is not a
-  differential test against `PSBTView`, so the step is partially done.
-
-**F-15**
-- [ ] BREAKS — Recommended fix and step 2: "Remove the `""` entry" breaks every
-  frozen import, because frozen lookup matches bare names only (frozenmod.c:103,
-  builtinimport.c:117-121). Keep `""`, remove `/qspi`, `/qspi/lib`, `/flash`
-  and `/flash/lib`, and `os.chdir('/')` before any import.
-- [ ] WRONG — step 1: "the frozen module always wins" is false.
-  `stat_dir_or_file` checks for a directory first (builtinimport.c:80-90), so a
-  `/qspi/config/__init__.py` package shadows a frozen `config.py`. The same
-  applies to any frozen single-file module. Update Scope constraints.
-- [ ] WRONG — the `except ImportError` rationale: a planted module runs before
-  anything is raised. Narrowing the `except` only makes errors visible; it is
-  not a security control.
-- [ ] UNCLEAR — "add `config.py` to manifests/": the manifests freeze `../src`,
-  so the file goes at `src/config.py`.
-- [ ] INCONSISTENT — the step 2 diff keeps `/flash` and `/flash/lib`, but the
-  finding and F-32 say internal flash is writable over MSC.
-
-**F-18**
-- [ ] WRONG — Default reachability: "Liquid blinding nonces" is wrong, because
-  blinding is derived from the host-supplied txseed (liquid/manager.py:256-260).
-  List instead: mnemonic, device and enc secrets, AEAD IVs, secure-channel
-  keys, and `getrandom`.
-- [ ] UNCLEAR — the caller list omits helpers.py:41 (AEAD IV) and
-  apps/getrandom.py:42.
-- [ ] UNCLEAR — diff: SECS/CECS are checked only after the DRDY wait, so a
-  seed error during the wait looks like a timeout, and `rng_last_error` is
-  never cleared. Check inside the loop, and reset it in `os_urandom`.
-
-**F-19**
-- [ ] REF — "Unknown wallet in inputs!" is at manager.py:391. :384 is the def.
-  Use 384-397.
-- [ ] UNCLEAR — "about 640 px": the page height is `670 - lbl.get_y()`
-  (transaction.py:32). Give the formula, or mark it for measurement on device.
-- [ ] BREAKS — step 2: `_on_scroll` is never registered
-  (`self.page.set_event_cb(...)` is missing). Whether LVGL v6 sends
-  `VALUE_CHANGED` on scroll is unverified, and `page2` (transaction.py:34-36)
-  is not covered.
-
-**F-33**
-- [ ] INCONSISTENT — "cannot fall through to the restore" and "failure branch
-  does `return false`". Replace with: the alert uses `BL_FOREVER` and never
-  returns, so the device powers off with WRP cleared, and `return false` at
-  1262 is unreachable.
-- [ ] WRONG — "permanent" clearing (2 places): WRP stays cleared until the next
-  successful signed upgrade. Say "persistent".
-- [ ] UNCLEAR — the diff is correct, but add: (a) the restore is still under
-  `#ifdef WRITE_PROTECTION`; (b) the `fatal_error` paths at 1237-1251 and 1268
-  are still unrestored.
-- [ ] REF — ordering table: the verify row should be 1254-1263.
-
-**F-35**
-- [ ] BREAKS — step 1: uncommenting the checks verbatim breaks every
-  confidential address, because the payload is 33 + 20 = 53 or 33 + 32 = 65
-  bytes. Use `len(decoded) < 35 or len(decoded) > 73` and
-  `data[0] == 0 and len(decoded) not in (53, 65)`. Drop "cost nothing".
-- [ ] WRONG — "all four checks": blech32.py:118-123 has three commented checks.
-- [ ] INCONSISTENT — the `0120`/`a120`/`f120` collision also appears on the
-  unconfidential `addresses.address` branch, so restoring the blech32 checks
-  alone does not fix it and fix 2 is required. Add that.
-- [ ] WRONG — the reproduction key `02`+`11`×32 is not a valid point
-  (`ec.PublicKey.parse` raises), and the program bytes are unspecified. State
-  that a stub with `sec()` was used, and give the program bytes.
-- [ ] UNCLEAR — "not one of the five canonical types": p2pkh also fails (H-25).
-  Say "not p2sh/p2wpkh/p2wsh/p2tr".
+Empty now
 
 ### 15.4 Low
 
@@ -8253,6 +8586,26 @@ production key lists and thresholds; and all F-32 port line references.
 - [x] UNCLEAR — diff: a bare `return` yields `None` ("User cancelled" at
   usb.py:78). Use `return False` to match signmessage.py:80.
 
+**F-07**
+- [x] REF — `ram.py:302` is `def get_pin`. `get_auth_word` is passed at
+  ram.py:311, 331, 339.
+- [x] BREAKS — step 1: calling `_check_card_identity()` only in `init` misses
+  reconnects, because `close()` clears `card_pubkey` (securechannel.py:201) and
+  `check_card` (memorycard.py:316-328) re-fetches it. It also breaks the "Use
+  a different card" flow (memorycard.py:406-422). Call it in `check_card` after
+  `open_secure_channel()`, and make card switching an explicit re-pair step.
+  — Fixed differently. "Misses reconnects" is wrong: a reconnect reuses the
+  cached key (securechannel.py:79-80), so an in-session swap already fails the
+  handshake. Calling the check in `check_card` is also not enough: after
+  `close()`, `connected` stays True and `ping()` reopens through `request()`
+  (securechannel.py:186-187), so memorycard.py:327 is never reached. The pin
+  now lives in `SecureChannel.get_card_pubkey`, and card switching is an
+  explicit re-pair. `git apply --check` passes; tested in CPython with a fake
+  card.
+- [x] UNCLEAR — Attack trace: the F-22 caveat applies (with `PIN_UNLOCKED` the
+  load step does not follow automatically). — Added to
+  the Attack trace and to the §11.1 answer.
+
 **F-08**
 - [x] REF — table: `build_firmware.sh:21` is `cd bootloader`. The make call is
   at :23.
@@ -8260,12 +8613,78 @@ production key lists and thresholds; and all F-32 port line references.
   `keys/test/*` entries.
 - [x] REF — RDP2 is compiled out at bl_syscalls.c:750-755, not 750-753.
 
+**F-10**
+- [x] Status: "Plausible" → "Resolved (embit `ff98e0f`)". The pinned `b2e606b`
+  includes `ff98e0f` (psbt.py:334-345). Pre-fix text is now in past tense. §3
+  moves it to a Resolved table. §10, §11 and §12 are updated. Disclosure is
+  needed only if upstream lacks `ff98e0f`.
+- [x] STALE — Evidence "copies … desynchronized scope" is present tense. It is
+  now rejected upstream (manager.py:947-956).
+- [x] STALE — the diff context uses pre-fix names. Replace it with "Applied in
+  `ff98e0f`; see psbt.py:328-346."
+- [x] WRONG — "`read_vout` may legitimately stop early": it reads through the
+  witnesses and locktime (transaction.py:118-149). Delete the sentence.
+- [x] STALE — step 2: embit `tests/tests/test_parsing.py:150`
+  (`test_non_witness_boundary`) covers boundaries, but it is not a
+  differential test against `PSBTView`, so the step is partially done.
+
 **F-11**
 - [x] BREAKS — step 2: setting `scope.value = -1` adds -1 into the displayed
   totals (manager.py:379). Leave `scope.value` and `scope.asset` as `None`
   instead, so manager.py:359-361 maps the input to `-1`/`???`.
 - [x] REF — host values are read at liquid/manager.py:356-357. Line 380 is
   only `metainp.update`. Cite 356-357, 379-385.
+
+**F-15**
+- [x] BREAKS — Recommended fix and step 2: "Remove the `""` entry" breaks every
+  frozen import, because frozen lookup matches bare names only (frozenmod.c:103,
+  builtinimport.c:117-121). Keep `""`, remove `/qspi`, `/qspi/lib`, `/flash`
+  and `/flash/lib`, and `os.chdir('/')` before any import. — Done;
+  compare is at frozenmod.c:106 (helper 101-116). Use `uos`, not `os`.
+- [x] WRONG — step 1: "the frozen module always wins" is false.
+  `stat_dir_or_file` checks for a directory first (builtinimport.c:80-90), so a
+  `/qspi/config/__init__.py` package shadows a frozen `config.py`. The same
+  applies to any frozen single-file module. Update Scope constraints. —
+  Done; the directory check is at builtinimport.c:86-96. The shadowing happens
+  on the `""` entry through CWD `/qspi`. Also found: `os`, `time`, `json` and
+  others are weak links resolved after the path search, so `/qspi/os.py` runs
+  at boot.py:3. Added to Scope constraints.
+- [x] WRONG — the `except ImportError` rationale: a planted module runs before
+  anything is raised. Narrowing the `except` only makes errors visible; it is
+  not a security control. — Also
+  replaced step 4's `__file__` signal: frozen modules do get `__file__`.
+- [x] UNCLEAR — "add `config.py` to manifests/": the manifests freeze `../src`,
+  so the file goes at `src/config.py`.
+- [x] INCONSISTENT — the step 2 diff keeps `/flash` and `/flash/lib`, but the
+  finding and F-32 say internal flash is writable over MSC. — Done. Checked
+  against source only; not run on the unix port or a device.
+
+**F-18**
+- [x] WRONG — Default reachability: "Liquid blinding nonces" is wrong, because
+  blinding is derived from the host-supplied txseed (liquid/manager.py:256-260).
+  List instead: mnemonic, device and enc secrets, AEAD IVs, secure-channel
+  keys, and `getrandom`.
+- [x] UNCLEAR — the caller list omits helpers.py:41 (AEAD IV) and
+  apps/getrandom.py:42.
+- [x] UNCLEAR — diff: SECS/CECS are checked only after the DRDY wait, so a
+  seed error during the wait looks like a timeout, and `rng_last_error` is
+  never cleared. Check inside the loop, and reset it in `os_urandom`. — Done; the diff
+  also adds the `extern` in rng.h and `py/mperrno.h` for `MP_EIO`. Context
+  checked with `patch`; loop logic checked on a host mock.
+
+**F-19**
+- [x] REF — "Unknown wallet in inputs!" is at manager.py:391. :384 is the def.
+  Use 384-397. — Done.
+- [x] UNCLEAR — "about 640 px": the page height is `670 - lbl.get_y()`
+  (transaction.py:32). — Replaced with the formula, marked for measurement on
+  device.
+- [x] BREAKS — step 2: `_on_scroll` is never registered
+  (`self.page.set_event_cb(...)` is missing). Whether LVGL v6 sends
+  `VALUE_CHANGED` on scroll is unverified, and `page2` (transaction.py:34-36)
+  is not covered. — Settled: v6.0 never sends `VALUE_CHANGED` for a page
+  scroll (lv_page.c:1077-1089). Step 2 now registers on the scrollable, checks
+  on `DRAG_END` (sent after the throw ends, lv_indev.c:1211-1223), latches,
+  gates only after content is final, and covers `page2`.
 
 **F-24**
 - [x] REF — step 1: the `add_warnings` call is at manager.py:987, not 985.
@@ -8296,6 +8715,20 @@ production key lists and thresholds; and all F-32 port line references.
   the custom sighash. Note that no dismissal path other than the two buttons
   may return `False`.
 
+**F-33**
+- [x] INCONSISTENT — "cannot fall through to the restore" and "failure branch
+  does `return false`". Replace with: the alert uses `BL_FOREVER` and never
+  returns, so the device powers off with WRP cleared, and `return false` at
+  1262 is unreachable.
+- [x] WRONG — "permanent" clearing (2 places): WRP stays cleared until the next
+  successful signed upgrade. Say "persistent". — Also fixed in the §2 summary.
+- [x] UNCLEAR — the diff is correct, but add: (a) the restore is still under
+  `#ifdef WRITE_PROTECTION`; (b) the `fatal_error` paths at 1237-1251 and 1268
+  are still unrestored. — Added; the diff was
+  also applied to a scratch copy and compiles with and without
+  `WRITE_PROTECTION`.
+- [x] REF — ordering table: the verify row should be 1254-1263.
+
 **F-34**
 - [x] UNCLEAR — the snippet omits the `skip_bytes` branch
   (scard_io.c:338-342) without marking it. Add `...`.
@@ -8303,6 +8736,25 @@ production key lists and thresholds; and all F-32 port line references.
   cited). Callers: 656-662 and 854-860.
 - [x] UNCLEAR — step 2: the post-call check runs after the out-of-bounds write
   has happened. Say it detects the overflow; the loop fix is the real fix.
+
+**F-35**
+- [x] BREAKS — step 1: uncommenting the checks verbatim breaks every
+  confidential address, because the payload is 33 + 20 = 53 or 33 + 32 = 65
+  bytes. Use `len(decoded) < 35 or len(decoded) > 73` and
+  `data[0] == 0 and len(decoded) not in (53, 65)`. Drop "cost nothing".
+  — Tested in CPython; bounds 35-73 and (53, 65) confirmed. Also fixed in
+  §12.1 and §13.4.
+- [x] WRONG — "all four checks": blech32.py:118-123 has three commented checks.
+- [x] INCONSISTENT — the `0120`/`a120`/`f120` collision also appears on the
+  unconfidential `addresses.address` branch, so restoring the blech32 checks
+  alone does not fix it and fix 2 is required. Add that.
+- [x] WRONG — the reproduction key `02`+`11`×32 is not a valid point
+  (`ec.PublicKey.parse` raises), and the program bytes are unspecified. State
+  that a stub with `sec()` was used, and give the program bytes. — Stub reproduces
+  the original outputs exactly; `G` collides too.
+- [x] UNCLEAR — "not one of the five canonical types": p2pkh also fails (H-25).
+  Say "not p2sh/p2wpkh/p2wsh/p2tr". — Also noted
+  that any first byte with `b % 0x50 >= 32` aborts (144 of 255).
 
 Re-verified against the tree on 2026-09-30 and removed: F-03, F-04, F-06,
 F-17, F-21, F-22, F-31, F-32.
