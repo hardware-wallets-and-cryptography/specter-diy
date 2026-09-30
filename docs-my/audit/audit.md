@@ -2060,7 +2060,7 @@ os.dupterm(None,0)
 os.dupterm(None,1)
 ```
 
-The inert `sys.path` cleanup at lines 7-10 is the subject of F-15. In the
+The inert `sys.path` cleanup at lines 6-10 is the subject of F-15. In the
 pinned MicroPython fork, `flash_error(4)` returns rather than halting, the USB
 fault default is `USBD_MODE_CDC_MSC`, and the MSC partition map is read-write.
 
@@ -2852,10 +2852,13 @@ Fixed in embit `ff98e0f` (Mike Tolkachev, 2026-09-17), which the pinned
 `b2e606b` includes. It is on the fork's `origin/master` and `origin/int`.
 [psbt.py:334-345](../../f469-disco/libs/common/embit/src/embit/psbt.py#L334-L345)
 now reads the value through `_BoundedReader(stream, length)` and calls
-`value_stream.finish()` on both branches. The wallet manager copies the value
-with the same declared length
-([manager.py:947-956](../../src/apps/wallets/manager.py#L947-L956)), so the
-smuggled record is now rejected before normalization.
+`value_stream.finish()` on both branches. The smuggled record is now rejected
+when the wallet manager first loads the input
+([manager.py:892](../../src/apps/wallets/manager.py#L892)): `finish()` raises
+"Trailing bytes in PSBT value"
+([psbt.py:35-37](../../f469-disco/libs/common/embit/src/embit/psbt.py#L35-L37)).
+The later copy uses the same declared length
+([manager.py:947-956](../../src/apps/wallets/manager.py#L947-L956)).
 
 **Recommended fix**
 
@@ -2891,7 +2894,7 @@ passes to produce the same scope boundaries and key set.
 | Prior compromise required | ❌ No |
 | Deterministic or probabilistic | Deterministic |
 | Owning codebase | This repository, `embit` submodule |
-| Files and code regions | [liquid/wallet.py:62](../../src/apps/wallets/liquid/wallet.py#L62); [liquid/manager.py:258](../../src/apps/wallets/liquid/manager.py#L258), [liquid/manager.py:354-383](../../src/apps/wallets/liquid/manager.py#L354-L383) ([L354](../../src/apps/wallets/liquid/manager.py#L354)); [liquid/pset.py:80-109](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L80-L109) ([L80](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L80)), [liquid/pset.py:165-174](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L165-L174) ([L165](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L165)) |
+| Files and code regions | [liquid/wallet.py:62](../../src/apps/wallets/liquid/wallet.py#L62); [liquid/manager.py:258](../../src/apps/wallets/liquid/manager.py#L258), [liquid/manager.py:356-385](../../src/apps/wallets/liquid/manager.py#L356-L385) ([L356](../../src/apps/wallets/liquid/manager.py#L356)); [liquid/pset.py:80-109](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L80-L109) ([L80](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L80)), [liquid/pset.py:165-174](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L165-L174) ([L165](../../f469-disco/libs/common/embit/src/embit/liquid/pset.py#L165)) |
 | Functions and modules | `LWallet.fill_pset_scope`, Liquid manager metadata generation, `LInputScope.unblind` |
 
 - **Affected component:** Liquid PSET input unblinding and display.
@@ -3140,7 +3143,10 @@ lookup matches bare names only
 Remove `/qspi`, `/qspi/lib`, `/flash`, and `/flash/lib`; F-32 exposes both
 partitions read-write. `/` is the empty VFS root, so relative stats there return
 not-found ([vfs.c:57-96](../../f469-disco/micropython/extmod/vfs.c#L57-L96),
-[vfs.c:129-134](../../f469-disco/micropython/extmod/vfs.c#L129-L134)). Use
+[vfs.c:129-134](../../f469-disco/micropython/extmod/vfs.c#L129-L134)). The
+exception is a name equal to a mount point: `import qspi` would load
+`/qspi/__init__.py` ([vfs.c:75-81](../../f469-disco/micropython/extmod/vfs.c#L75-L81)).
+No code in `src/` or `boot/` imports `qspi` or `flash`. Use
 `uos`, because `import os` itself searches `sys.path`. Make the
 `config` choice a frozen build-time setting or authenticated data rather than
 executable Python. Test that every production import resolves only to frozen or
@@ -3558,34 +3564,48 @@ output list.
    Sketch for `Prompt`:
 
    ```python
-   def gate_confirm(self):
+   # events scrl_def_event_cb forwards to the page (lv_page.c:1082-1085)
+   _FWD = (lv.EVENT.PRESSED, lv.EVENT.PRESSING, lv.EVENT.PRESS_LOST,
+           lv.EVENT.RELEASED, lv.EVENT.SHORT_CLICKED, lv.EVENT.CLICKED,
+           lv.EVENT.LONG_PRESSED, lv.EVENT.LONG_PRESSED_REPEAT,
+           lv.EVENT.DRAG_BEGIN, lv.EVENT.DRAG_END, lv.EVENT.DRAG_THROW_BEGIN)
+
+   def gate_confirm(self, *pages):
        # call once the page content is final
-       self._seen_end = False
-       self.page.get_scrl().set_event_cb(self._on_scrl_event)
-       self._check_end()
+       self._seen_end = {}
+       for page in pages:
+           self._seen_end[id(page)] = False
+           page.get_scrl().set_event_cb(
+               lambda obj, event, page=page: self._on_scrl_event(page, event))
+       for page in pages:
+           self._check_end(page)
 
-   def _on_scrl_event(self, obj, event):
+   def _on_scrl_event(self, page, event):
        # replaces scrl_def_event_cb, so keep forwarding events to the page
-       lv.event_send(self.page, event, None)
+       if event in self._FWD:
+           lv.event_send(page, event, None)
        if event == lv.EVENT.DRAG_END:
-           self._check_end()
+           self._check_end(page)
 
-   def _check_end(self):
-       scrl = self.page.get_scrl()
-       if scrl.get_y() + scrl.get_height() <= self.page.get_height() + 4:
-           self._seen_end = True
+   def _check_end(self, page):
+       scrl = page.get_scrl()
+       if scrl.get_y() + scrl.get_height() <= page.get_height() + 4:
+           self._seen_end[id(page)] = True
+       done = all(self._seen_end.values())
        self.confirm_button.set_state(
-           lv.btn.STATE.REL if self._seen_end else lv.btn.STATE.INA)
+           lv.btn.STATE.REL if done else lv.btn.STATE.INA)
    ```
 
-   - Call `gate_confirm()` only after the content is final. `TransactionScreen`
+   - Call `gate_confirm(self.page)` only after the content is final. `TransactionScreen`
      fills `self.page` after `Prompt.__init__` returns, so an overflow check
      inside `Prompt.__init__` sees an empty page.
    - `_seen_end` latches: scrolling back up does not re-disable Confirm. Content
      that fits without scrolling enables Confirm at once.
    - `page2` ([transaction.py:34-36](../../src/gui/screens/transaction.py#L34-L36))
-     is a second scrolling page for the details view. Register the same callback
-     on it if its content must also be reviewed. Toggling the details switch
+     is a second scrolling page for the details view. If its content must also
+     be reviewed, call `gate_confirm(self.page, self.page2)`. Each page gets its
+     own callback and latch, and Confirm needs both. Toggling the details
+     switch ([transaction.py:247-253](../../src/gui/screens/transaction.py#L247-L253))
      must not change the gate by itself.
    - Test on device: the binding names (`lv.event_send`, `lv.EVENT.DRAG_END`,
      `lv.btn.STATE.INA`), the 4 px tolerance, and the event sequence.
@@ -4394,7 +4414,7 @@ and make Cancel the affirmative button.
 2. For `SINGLE`, verify a matching output index exists before offering the
    prompt.
 3. Rewrite the warning in
-   [manager.py:646-662](../../src/apps/wallets/manager.py#L646-L662) ([L646](../../src/apps/wallets/manager.py#L646)) to state the
+   [manager.py:646-663](../../src/apps/wallets/manager.py#L646-L663) ([L646](../../src/apps/wallets/manager.py#L646)) to state the
    consequence, and swap the button roles so Cancel is the affirmative action:
 
    ```diff
@@ -4611,7 +4631,7 @@ erase-and-copy stage. Report protection state on failure.
      unprotect at 1231-1234 is not. Step 3 covers this.
    - (b) The `fatal_error` paths at 1237-1251 (erase, copy, hash) and 1268
      (integrity records) still skip the restore. `fatal_error` is `noreturn`
-     ([bootloader.c:183-193](../../bootloader/core/bootloader.c#L183-L193)) and
+     ([bootloader.c:183-197](../../bootloader/core/bootloader.c#L183-L197)) and
      ends in `blsys_fatal_error`
      ([bl_syscalls.c:863](../../bootloader/platforms/stm32f469disco/bootloader/bl_syscalls.c#L863)).
      Restore WRP inside a cleanup handler that runs before these, or rely on
@@ -5802,8 +5822,8 @@ a control character — returns a **negative** value. The computed index into th
 - a table entry of -1 raises `ValueError`.
 
 So different QR strings can decode to the same bytes, and non-alphabetic garbage
-can decode "successfully". With F-28 removing the CRC check, nothing downstream
-catches it.
+can decode "successfully". Multi-part UR never checks the CRC (F-28), so
+nothing downstream catches it.
 
 **Code at this tree.**
 [bytewords.py:29](../../f469-disco/libs/common/microur/util/bytewords.py#L29)
@@ -6022,12 +6042,14 @@ re-derive the authoritative value after unlock.
 
 Every consistency check in the `microur` decoder is an `assert`: `ur_type`,
 `seq_num`, `seq_len`, `msg_len`, `checksum`, `payload_len`, the `readinto` length
-in `_reduce`, the CBOR header tag, and the one CRC check that does exist
-([decoder.py:46-70](../../f469-disco/libs/common/microur/decoder.py#L46-L70) ([L46](../../f469-disco/libs/common/microur/decoder.py#L46)),
+in `_reduce`, the CBOR header tag, and the one CRC check that does exist, on
+the single-part path
+([decoder.py:44-78](../../f469-disco/libs/common/microur/decoder.py#L44-L78) ([L44](../../f469-disco/libs/common/microur/decoder.py#L44)),
+[decoder.py:51](../../f469-disco/libs/common/microur/decoder.py#L51),
 [util/ur.py:11-20](../../f469-disco/libs/common/microur/util/ur.py#L11-L20) ([L11](../../f469-disco/libs/common/microur/util/ur.py#L11)),
 [util/ur.py:23](../../f469-disco/libs/common/microur/util/ur.py#L23),
 [util/cbor.py](../../f469-disco/libs/common/microur/util/cbor.py),
-[util/bytewords.py:62-90](../../f469-disco/libs/common/microur/util/bytewords.py#L62-L90) ([L62](../../f469-disco/libs/common/microur/util/bytewords.py#L62))).
+[util/bytewords.py:69-83](../../f469-disco/libs/common/microur/util/bytewords.py#L69-L83) ([L82](../../f469-disco/libs/common/microur/util/bytewords.py#L82))).
 
 The current build does **not** strip them. `MPY_CROSS_FLAGS` is only
 `-march=armv7m` (`f469-disco/micropython/ports/stm32/Makefile:142`), and no `-O`
@@ -6871,8 +6893,8 @@ outside it.
 ### 8.5 Parser assessment
 
 The most consequential parser root cause is accepting PSBT v2-only fields in v0
-scopes. The unbounded `non_witness_utxo` value parse causes cross-pass
-desynchronization. Legacy animated QR accepts invalid indexes and weakly binds
+scopes. The unbounded `non_witness_utxo` value parse caused cross-pass
+desynchronization until embit `ff98e0f` bounded it (F-10, resolved). Legacy animated QR accepts invalid indexes and weakly binds
 frames. The UR side adds a second parser weakness: the fountain decoder never
 verifies any checksum (F-28), the bytewords decoder silently maps
 out-of-alphabet characters to wrong bytes (H-08), and all of that validation is
@@ -8128,7 +8150,7 @@ prerequisite or coverage limit that static inspection did not settle.
 | --- | --- |
 | Can a malicious host steal private keys through normal firmware interfaces? | No direct private-key or mnemonic export exists. But a host can take the **master xpub** and fingerprint with no confirmation at all (F-05), and can get a **recoverable** signature — and therefore the public key — at any derivation path with one confirmation. Privacy loss is total. No spending-authority path was found. Physical flash readout can enable seed recovery (F-06). |
 | Can a host cause signing of a transaction different from what the user believes was approved? | **Yes, three ways.** F-03 is a value-destroying divergence paid to a miner: displayed input amounts are never authenticated (High). F-21 is a divergence on the message-signing prompt, where a NUL truncates what is drawn but not what is hashed (High). F-24 and F-19 are the structural version: the default screen omits input values and change outputs without saying so, and the fee sits below an attacker-chosen number of outputs while Confirm stays fixed on screen. Transaction version, locktime and input sequences are now rendered on the details page. The v2-field parser class is closed (PATH-41), but only in the dependency (H-27). |
-| Can malicious QR, PSBT, or descriptor data exploit the wallet? | **Yes for malicious PSBT data.** For QR, F-16 and F-28 let frames from two payloads be spliced and never check any checksum, and H-08 lets malformed characters decode silently. None is an independent theft primitive, because the result is still displayed, but they amplify payload confusion. Malicious PSET data additionally reaches the Liquid address encoder and produces a misleading confirmation screen (F-35) or aborts it (H-25). Script, Base58, and Bech32 handling is clean on the Bitcoin side (PATH-34 to PATH-37). Descriptor scope is only partly resolved: the ownership path re-derives and compares the scriptPubKey and the device overwrites host-supplied witness and redeem scripts, but full descriptor, Miniscript, and TapTree parser safety is not established. |
+| Can malicious QR, PSBT, or descriptor data exploit the wallet? | **Yes for malicious PSBT data.** For QR, F-16 and F-28 let frames from two payloads be spliced and never check the multi-part checksum, and H-08 lets malformed characters decode silently. None is an independent theft primitive, because the result is still displayed, but they amplify payload confusion. Malicious PSET data additionally reaches the Liquid address encoder and produces a misleading confirmation screen (F-35) or aborts it (H-25). Script, Base58, and Bech32 handling is clean on the Bitcoin side (PATH-34 to PATH-37). Descriptor scope is only partly resolved: the ownership path re-derives and compares the scriptPubKey and the device overwrites host-supplied witness and redeem scripts, but full descriptor, Miniscript, and TapTree parser safety is not established. |
 | Can SD or USB data execute unauthorized code? | No application-level adapter evaluates payload data, and boot-time SD module shadowing is not compiled in (PATH-30). However, F-32 plausibly exposes both flash partitions read-write over USB MSC after an inducible boot fault, and writing `/qspi/config.py` then reaches F-15's confirmed pre-PIN import on every normal boot. FatFs and native USB/SD memory safety is unreviewed. |
 | Can firmware signature verification be bypassed? | Not by breaking the algorithm: the verifier and the tool/device message construction are sound. But **F-17** can harvest valid authorization through message signing, **F-25** accepts forged CRC records after direct flash write, and **F-33** lets an unsigned SD file clear WRP even though its bytes remain blocked from immediate execution (PATH-23). |
 | Can an older vulnerable firmware be installed? | **No through the supported upgrade path.** `check_versions` compares against the maximum of the current integrity record and either version-check record. The erase sequence persists that maximum, so at least one copy survives every power-cut point, and the claimed version sits inside the signed section header and the authorization message. Bootloader fallback accepts only a copy with the same version, never older. Same-version recovery is intentionally allowed for a corrupt resident image. F-25's arbitrary flash write can rewrite records directly, and F-33 can destroy firmware and clear WRP but leaves the version floor intact. Neither is a supported-path rollback. See PATH-24 and PATH-26. |
@@ -8166,7 +8188,8 @@ prerequisite or coverage limit that static inspection did not settle.
 5. **High.** Move USB and dupterm shutdown to the first executable boot
    statements, make peripheral initialization fail closed, and prevent MSC from
    exporting wallet partitions in any fault state (F-32). Remove writable module
-   roots, the empty import entry, and the executable `config` override (F-15).
+   roots, keep the `""` entry with CWD set to `/`, and remove the executable
+   `config` override (F-15).
 6. **High.** Enforce previous-transaction verification (F-03) and equivalent
    script-membership checks for every signing key (F-04). In the same pass, add
    the scope-to-global-output equality check in this repository's wallet manager
@@ -8414,7 +8437,8 @@ In priority order:
    for F-10 only if upstream lacks `ff98e0f`. Establish first whether the fork this tree pins matches upstream
    (PATH-18). F-03 is this repository's own defect, not upstream's.
 6. **Route F-35 and F-36 to the `embit` maintainers together with the PSBT
-   items.** Restoring the three commented-out checks in `blech32.decode` and adding
+   items.** Restoring the three commented-out checks in `blech32.decode`, with
+   bounds shifted for the 33-byte key prefix (35-73; v0 payload 53 or 65), and adding
    a `script_type()` gate to `addresses.address` closes F-35, F-36, and H-25 in
    one change. Then take the *taproot output-key tweak* and Miniscript/TapTree
    script construction to Deep, since those determine the `p2tr` program this
@@ -8581,180 +8605,6 @@ production key lists and thresholds; and all F-32 port line references.
 
 ### 15.6 Done
 
-**F-05**
-- [x] REF — xpubs.py 257-278 vs 257-277: pick one. - I pick 257-278
-- [x] UNCLEAR — diff: a bare `return` yields `None` ("User cancelled" at
-  usb.py:78). Use `return False` to match signmessage.py:80.
-
-**F-07**
-- [x] REF — `ram.py:302` is `def get_pin`. `get_auth_word` is passed at
-  ram.py:311, 331, 339.
-- [x] BREAKS — step 1: calling `_check_card_identity()` only in `init` misses
-  reconnects, because `close()` clears `card_pubkey` (securechannel.py:201) and
-  `check_card` (memorycard.py:316-328) re-fetches it. It also breaks the "Use
-  a different card" flow (memorycard.py:406-422). Call it in `check_card` after
-  `open_secure_channel()`, and make card switching an explicit re-pair step.
-  — Fixed differently. "Misses reconnects" is wrong: a reconnect reuses the
-  cached key (securechannel.py:79-80), so an in-session swap already fails the
-  handshake. Calling the check in `check_card` is also not enough: after
-  `close()`, `connected` stays True and `ping()` reopens through `request()`
-  (securechannel.py:186-187), so memorycard.py:327 is never reached. The pin
-  now lives in `SecureChannel.get_card_pubkey`, and card switching is an
-  explicit re-pair. `git apply --check` passes; tested in CPython with a fake
-  card.
-- [x] UNCLEAR — Attack trace: the F-22 caveat applies (with `PIN_UNLOCKED` the
-  load step does not follow automatically). — Added to
-  the Attack trace and to the §11.1 answer.
-
-**F-08**
-- [x] REF — table: `build_firmware.sh:21` is `cd bootloader`. The make call is
-  at :23.
-- [x] UNCLEAR — label the `git ls-tree` output "(excerpt)". It omits 11
-  `keys/test/*` entries.
-- [x] REF — RDP2 is compiled out at bl_syscalls.c:750-755, not 750-753.
-
-**F-10**
-- [x] Status: "Plausible" → "Resolved (embit `ff98e0f`)". The pinned `b2e606b`
-  includes `ff98e0f` (psbt.py:334-345). Pre-fix text is now in past tense. §3
-  moves it to a Resolved table. §10, §11 and §12 are updated. Disclosure is
-  needed only if upstream lacks `ff98e0f`.
-- [x] STALE — Evidence "copies … desynchronized scope" is present tense. It is
-  now rejected upstream (manager.py:947-956).
-- [x] STALE — the diff context uses pre-fix names. Replace it with "Applied in
-  `ff98e0f`; see psbt.py:328-346."
-- [x] WRONG — "`read_vout` may legitimately stop early": it reads through the
-  witnesses and locktime (transaction.py:118-149). Delete the sentence.
-- [x] STALE — step 2: embit `tests/tests/test_parsing.py:150`
-  (`test_non_witness_boundary`) covers boundaries, but it is not a
-  differential test against `PSBTView`, so the step is partially done.
-
-**F-11**
-- [x] BREAKS — step 2: setting `scope.value = -1` adds -1 into the displayed
-  totals (manager.py:379). Leave `scope.value` and `scope.asset` as `None`
-  instead, so manager.py:359-361 maps the input to `-1`/`???`.
-- [x] REF — host values are read at liquid/manager.py:356-357. Line 380 is
-  only `metainp.update`. Cite 356-357, 379-385.
-
-**F-15**
-- [x] BREAKS — Recommended fix and step 2: "Remove the `""` entry" breaks every
-  frozen import, because frozen lookup matches bare names only (frozenmod.c:103,
-  builtinimport.c:117-121). Keep `""`, remove `/qspi`, `/qspi/lib`, `/flash`
-  and `/flash/lib`, and `os.chdir('/')` before any import. — Done;
-  compare is at frozenmod.c:106 (helper 101-116). Use `uos`, not `os`.
-- [x] WRONG — step 1: "the frozen module always wins" is false.
-  `stat_dir_or_file` checks for a directory first (builtinimport.c:80-90), so a
-  `/qspi/config/__init__.py` package shadows a frozen `config.py`. The same
-  applies to any frozen single-file module. Update Scope constraints. —
-  Done; the directory check is at builtinimport.c:86-96. The shadowing happens
-  on the `""` entry through CWD `/qspi`. Also found: `os`, `time`, `json` and
-  others are weak links resolved after the path search, so `/qspi/os.py` runs
-  at boot.py:3. Added to Scope constraints.
-- [x] WRONG — the `except ImportError` rationale: a planted module runs before
-  anything is raised. Narrowing the `except` only makes errors visible; it is
-  not a security control. — Also
-  replaced step 4's `__file__` signal: frozen modules do get `__file__`.
-- [x] UNCLEAR — "add `config.py` to manifests/": the manifests freeze `../src`,
-  so the file goes at `src/config.py`.
-- [x] INCONSISTENT — the step 2 diff keeps `/flash` and `/flash/lib`, but the
-  finding and F-32 say internal flash is writable over MSC. — Done. Checked
-  against source only; not run on the unix port or a device.
-
-**F-18**
-- [x] WRONG — Default reachability: "Liquid blinding nonces" is wrong, because
-  blinding is derived from the host-supplied txseed (liquid/manager.py:256-260).
-  List instead: mnemonic, device and enc secrets, AEAD IVs, secure-channel
-  keys, and `getrandom`.
-- [x] UNCLEAR — the caller list omits helpers.py:41 (AEAD IV) and
-  apps/getrandom.py:42.
-- [x] UNCLEAR — diff: SECS/CECS are checked only after the DRDY wait, so a
-  seed error during the wait looks like a timeout, and `rng_last_error` is
-  never cleared. Check inside the loop, and reset it in `os_urandom`. — Done; the diff
-  also adds the `extern` in rng.h and `py/mperrno.h` for `MP_EIO`. Context
-  checked with `patch`; loop logic checked on a host mock.
-
-**F-19**
-- [x] REF — "Unknown wallet in inputs!" is at manager.py:391. :384 is the def.
-  Use 384-397. — Done.
-- [x] UNCLEAR — "about 640 px": the page height is `670 - lbl.get_y()`
-  (transaction.py:32). — Replaced with the formula, marked for measurement on
-  device.
-- [x] BREAKS — step 2: `_on_scroll` is never registered
-  (`self.page.set_event_cb(...)` is missing). Whether LVGL v6 sends
-  `VALUE_CHANGED` on scroll is unverified, and `page2` (transaction.py:34-36)
-  is not covered. — Settled: v6.0 never sends `VALUE_CHANGED` for a page
-  scroll (lv_page.c:1077-1089). Step 2 now registers on the scrollable, checks
-  on `DRAG_END` (sent after the throw ends, lv_indev.c:1211-1223), latches,
-  gates only after content is final, and covers `page2`.
-
-**F-24**
-- [x] REF — step 1: the `add_warnings` call is at manager.py:987, not 985.
-
-**F-25**
-- [x] WRONG — the record "holds `pl_crc` and `struct_crc` and nothing else".
-  It holds magic, struct_rev, pl_ver, main and aux `{pl_size, pl_crc}`, and
-  struct_crc (bl_integrity_check.h:57-64). Say "only magic, revision, version,
-  sizes and CRC32s; no signature, MAC or key". `icr_validate` also checks
-  `pl_ver`. — Also fixed in §8.10 SM-13, which repeated the claim.
-- [x] REF — `bl_integrity_check.h:47-63` → 47-64; table `bootloader.c:1206-1216`
-  is the version check, so cite 1237-1269 for copy and verify.
-- [x] INCONSISTENT — the pseudo-code `alert; return false;`: the alert uses
-  `BL_FOREVER` and never returns (bl_syscalls.c:245, 882-884).
-
-**F-28**
-- [x] REF — `bytewords.py:46` is `stream_decode`, which does check the CRC.
-  Cite `stream_decode_check` (69-83, TODO at 74) and `decodeinto` (85-92).
-- [x] BREAKS — step 1: on a mismatch the combined file stays on disk, and
-  `result()` skips `_combine()` when `is_combined` (decoder.py:153-154). Delete
-  the `{seq_len}` part file before raising. — Fixed differently: the diff now
-  verifies the CRC in a read-only pass before opening the output, so no file
-  is written. `URDecoderBase` has no delete hook. Tested in CPython.
-
-**F-30**
-- [x] REF — table: `manager.py:1019` → 1023; `:624` → 624-626.
-- [x] UNCLEAR — step 3: after the button swap, any `False` result signs with
-  the custom sighash. Note that no dismissal path other than the two buttons
-  may return `False`.
-
-**F-33**
-- [x] INCONSISTENT — "cannot fall through to the restore" and "failure branch
-  does `return false`". Replace with: the alert uses `BL_FOREVER` and never
-  returns, so the device powers off with WRP cleared, and `return false` at
-  1262 is unreachable.
-- [x] WRONG — "permanent" clearing (2 places): WRP stays cleared until the next
-  successful signed upgrade. Say "persistent". — Also fixed in the §2 summary.
-- [x] UNCLEAR — the diff is correct, but add: (a) the restore is still under
-  `#ifdef WRITE_PROTECTION`; (b) the `fatal_error` paths at 1237-1251 and 1268
-  are still unrestored. — Added; the diff was
-  also applied to a scratch copy and compiles with and without
-  `WRITE_PROTECTION`.
-- [x] REF — ordering table: the verify row should be 1254-1263.
-
-**F-34**
-- [x] UNCLEAR — the snippet omits the `skip_bytes` branch
-  (scard_io.c:338-342) without marking it. Add `...`.
-- [x] REF — the function is at scard_io.c:333-348 (three different ranges are
-  cited). Callers: 656-662 and 854-860.
-- [x] UNCLEAR — step 2: the post-call check runs after the out-of-bounds write
-  has happened. Say it detects the overflow; the loop fix is the real fix.
-
-**F-35**
-- [x] BREAKS — step 1: uncommenting the checks verbatim breaks every
-  confidential address, because the payload is 33 + 20 = 53 or 33 + 32 = 65
-  bytes. Use `len(decoded) < 35 or len(decoded) > 73` and
-  `data[0] == 0 and len(decoded) not in (53, 65)`. Drop "cost nothing".
-  — Tested in CPython; bounds 35-73 and (53, 65) confirmed. Also fixed in
-  §12.1 and §13.4.
-- [x] WRONG — "all four checks": blech32.py:118-123 has three commented checks.
-- [x] INCONSISTENT — the `0120`/`a120`/`f120` collision also appears on the
-  unconfidential `addresses.address` branch, so restoring the blech32 checks
-  alone does not fix it and fix 2 is required. Add that.
-- [x] WRONG — the reproduction key `02`+`11`×32 is not a valid point
-  (`ec.PublicKey.parse` raises), and the program bytes are unspecified. State
-  that a stub with `sec()` was used, and give the program bytes. — Stub reproduces
-  the original outputs exactly; `G` collides too.
-- [x] UNCLEAR — "not one of the five canonical types": p2pkh also fails (H-25).
-  Say "not p2sh/p2wpkh/p2wsh/p2tr". — Also noted
-  that any first byte with `b % 0x50 >= 32` aborts (144 of 255).
-
-Re-verified against the tree on 2026-09-30 and removed: F-03, F-04, F-06,
-F-17, F-21, F-22, F-31, F-32.
+Re-verified against the tree on 2026-09-30 and removed: F-03, F-04, F-05,
+F-06, F-07, F-08, F-10, F-11, F-15, F-17, F-18, F-19, F-21, F-22, F-24, F-25,
+F-28, F-30, F-31, F-32, F-33, F-34, F-35.

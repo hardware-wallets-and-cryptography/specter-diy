@@ -26,8 +26,8 @@
 > `bootloader/lib/secp256k1` predates upstream's first tag; `git describe
 > --contains` gives `v0.2.0~173`.
 
-> **8 remotes are forked** *(9 submodules; `secp256k1-zkp` is used twice, see below)*  
-> **1 remote is external** (`bitcoin-core/secp256k1`)
+> **1 remote is external** (`bitcoin-core/secp256k1`)  
+> **8 remotes are forked** *(9 submodules; `secp256k1-zkp` is used twice, see below)*
 
 > Remote `secp256k1-zkp` appears twice:
 > - under `f469-disco/usermods/secp256k1`  
