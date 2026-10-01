@@ -398,7 +398,7 @@ deliberately not relabelled as vulnerabilities.
 | Hardening | Low | F-09, F-13, F-14 |
 
 Section 7 holds the additional `H-*` observations. Dependency items D-01 to
-D-03 are in Section 8.9, and doc-vs-code item DOC-01 is in Section 8.10.
+D-03 are in Section 8.8, and doc-vs-code item DOC-01 is in Section 8.10.
 
 ## 4. Components and trust boundaries
 
@@ -771,7 +771,7 @@ fee as verified. Add the F-24 fee sanity check as defense in depth.
 
 **Regression test**
 
-[test_unverified_witness_utxo_input_is_flagged:44-71](../../test/tests_native/test_signing_authorization.py#L44-L71) ([L44](../../test/tests_native/test_signing_authorization.py#L44)),
+[test_unverified_witness_utxo_input_is_flagged](../../test/tests_native/test_signing_authorization.py#L33),
 now green.
 
 **Resolution**
@@ -799,6 +799,37 @@ That existing green test uses a `witness_utxo`-only PSBT (no
 - The identical discarded-`verify()` call in
   [liquid/manager.py:296](../../src/apps/wallets/liquid/manager.py#L296) — not
   touched, and not exercised by any test.
+
+**My GPT-6 Sol review**
+
+- **Valid, but not resolved as an authorization issue.** `verify()` returns
+  `False` for a witness-UTXO-only input
+  ([psbt.py:301](../../f469-disco/libs/common/embit/src/embit/psbt.py#L301));
+  [manager.py:895](../../src/apps/wallets/manager.py#L895) records a warning
+  only in `meta["inputs"][i]`. [TransactionScreen](../../src/gui/screens/transaction.py#L15)
+  neither renders that field nor marks the fee unverified. Keep the status
+  **partially remediated** and the fee-display attack open.
+- **Fix gap:** the proposed `fee_verified` label is inside the scrollable page
+  and does not meet the recommended *unavoidable* warning. Prefer rejecting
+  unverified inputs; if witness-only inputs must remain supported, put a
+  persistent pre-confirmation warning and unverified-fee state on the main
+  screen, including for a zero fee. Update the witness-only fixture and its
+  no-warning expectation deliberately rather than treating that test as a
+  security reason to suppress the warning.
+- **Failing evidence test:** [test_unverified_second_input_cannot_produce_an_unqualified_fee](../../test/evidence/test_signing_authorization.py)
+  supplies one prevtx-verified input and one witness-only input. Preprocessing
+  reports a 10,000-satoshi fee and stores only the latter input's warning;
+  the test fails independently on the absence of an unverified-amount warning
+  in the top-level metadata used by the primary confirmation screen and on
+  the missing `fee_verified=False` flag. The earlier
+  [per-input regression](../../test/tests_native/test_signing_authorization.py#L33)
+  still passes. Run `python3 test/evidence/run.py` from the repository root
+  for the deliberately failing evidence suite; the two existing
+  authorization checks remain in the normal native suite. This does
+  **not** exercise actual GUI rendering or two
+  approvals/signature combination; add on-device/simulator confirmation and
+  two-approval attack tests once the desired reject-or-warn policy is chosen.
+  Cover Liquid separately; native test stubs do not instantiate the screen.
 
 ---
 
@@ -954,7 +985,7 @@ not x-only keys, outside Taproot.
 
 **Regression test**
 
-[test_signing_refuses_key_absent_from_input_script:100](../../test/tests_native/test_signing_authorization.py#L100), now green — see **Remediation** below.
+[test_signing_refuses_key_absent_from_input_script](../../test/tests_native/test_signing_authorization.py#L72), now green — see **Remediation** below.
 
 **Remediation**
 
@@ -1013,6 +1044,39 @@ Net effect: the theft-chain path this finding describes is closed. The two
 remaining items are narrower, pre-existing-severity-unchanged loose ends
 inside the same function, not reachable exploits on their own as far as this
 review determined.
+
+**My GPT-6 Sol review**
+
+- **Partly fixed, but the claimed closure is too strong.** The existing
+  [regression](../../test/tests_native/test_signing_authorization.py#L72)
+  passes for a key *absent* from `witness_script`. A fabricated input with a
+  `witness_script` containing the derived key but **not committed to by its
+  previous transaction's scriptPubKey** still returns one signature from
+  [PSBTView.sign_input](../../f469-disco/libs/common/embit/src/embit/psbtview.py#L914).
+  I reproduced `prevtx verified: True`, `script commitment matches: False`,
+  `derived signatures: 1` using a matching `non_witness_utxo`. Thus even
+  making F-03's missing-prevtx check fatal would not close this path: the
+  substring membership test consults the supplied script, not whether the
+  authenticated UTXO commits to it. This demonstrates a remaining
+  fabricated-input signing oracle, **not** a completed funds-theft chain;
+  SegWit signatures also commit to the supplied script code.
+- **Fix gap:** before signing, check that each witness/redeem script matches
+  the committed scriptPubKey, and authorize the input against a resolved
+  wallet or an explicit standalone signing policy. The proposed item 3 cannot
+  simply skip every unresolved input without deciding how intentionally
+  supported standalone signing should work. Matching arbitrary `sec`/`pkh`
+  bytes in a script, including unreachable pushes, is not equivalent to
+  authorizing a key by script policy. The full-SEC comparison in item 2 is
+  correct for non-Taproot, but does not close this gap.
+- **Failing evidence test:** [test_signing_refuses_script_not_committed_by_verified_prevtx](../../test/evidence/test_signing_authorization.py)
+  supplies a real, hash-verified `non_witness_utxo` whose P2WSH scriptPubKey
+  does not commit to the attacker-supplied witness script containing the
+  derived key. It fails because `manager.sign_psbtview` still returns that
+  key's partial signature; the original absent-key regression remains green.
+  This is evidence of unauthorized signing, not of a completed theft. Still
+  add a committed script with a non-executable key occurrence, a wrong-parity
+  non-Taproot derivation, and positive tests for supported wallet/standalone
+  signing before declaring the path closed.
 
 ---
 
@@ -1243,6 +1307,23 @@ until the fix lands:
 | Current single HMAC | ~5 µs | Expected failure. The suite stays green |
 | PBKDF2-SHA256, 200k iterations | ~30 ms | Unexpected success, which fails the run. Remove the decorator |
 
+**My GPT-6 Sol review**
+
+- **Valid, conditional High.** [FlashKeyStore](../../src/keystore/flash.py#L127)
+  checks a PIN guess with one HMAC before unwrapping the stored secret. This
+  supports the offline-guessing claim *if the flash record can be read*; no
+  physical extraction was demonstrated.
+- **Fix gap:** PBKDF2 increases cost but cannot make a readable,
+  low-entropy PIN resistant to unlimited offline guesses. Enforce PIN length
+  in the keystore as well as the screen, benchmark iterations on target, and
+  make migration of PIN state and `enc_secret` crash-safe across separate
+  writes. Correct the contrary offline-guessing assurance in
+  [security-info.md](../../docs/security-info.md#L158).
+- **Test gap:** the five key-separation tests pass, but
+  [the cost test](../../test/tests_native/test_pin_key_separation.py#L114)
+  remains an expected failure, not evidence of remediation. Add measured
+  on-device cost, migration interruption, and old/new-record tests.
+
 ---
 
 ### F-17: Firmware authorization and user message signing share one signing domain
@@ -1399,6 +1480,25 @@ either side. The message app accepts any derivation path with no allowlist.
 3. Have the message app detect the bootloader `hrp` grammar and show an explicit
    "This authorizes a FIRMWARE RELEASE" screen rather than the generic message
    prompt.
+
+**My GPT-6 Sol review**
+
+- **Valid domain-collision design risk, conditional on release keys signing
+  through the generic message app.** The
+  [bootloader hash](../../bootloader/core/bl_signature.c#L148) and
+  [message-signing hash](../../src/apps/signmessage/signmessage.py#L99) use
+  the same construction. Two release-key approvals would be needed; this
+  review has not established that maintainers actually use those keys in
+  general-purpose signing devices.
+- **Fix gap:** changing only the bootloader's prefix would break release
+  signing. Update the signing, verification, and imported-signature recovery
+  tools ([signature.py](../../bootloader/tools/core/signature.py#L109),
+  [recovery.py](../../bootloader/tools/core/recovery.py#L35)) in concert;
+  explicitly plan upgrades for devices still running the old verifier. Until
+  migration, isolate release keys from the generic signing command.
+- **Test gap:** no cross-domain regression is supplied. Prove that a firmware
+  signature never verifies as a user-message signature or vice versa, and
+  exercise old-bootloader upgrade compatibility.
 
 ---
 
@@ -1593,6 +1693,26 @@ untouched. This sub-issue is still open.
 - No happy-path test confirming an ordinary printable message still displays
   and signs unchanged.
 
+**My GPT-6 Sol review**
+
+- **Partially resolved, not wholly Resolved.** The NUL/non-ASCII mismatch
+  targeted by the regression is blocked by
+  [explicit byte validation](../../src/apps/signmessage/signmessage.py#L60).
+  Remaining issues are separate: printable separators can impersonate the
+  in-label frame, host-selected paths remain unbounded, and
+  [the address mapping](../../src/apps/signmessage/signmessage.py#L85)
+  mislabels `m/86h` as a legacy address. Do not continue to describe the
+  fixed NUL route as a live High exploit; assess the remaining routes on
+  their own merits.
+- **Fix gap:** draw the frame in separate trusted widgets, constrain or
+  conspicuously display the signing path, and omit an address where the
+  purpose-to-address mapping is unsupported. Escaping NUL alone cannot
+  prevent a forged *printable* separator.
+- **Test gap:** [the native NUL test](../../test/tests_native/test_message_signing_display.py#L73)
+  passes, but stubs signing and does not inspect rendered LVGL text or prove
+  the exact bytes signed. Add printable-frame and `m/86h` cases, plus
+  on-device/simulator rendering and signed-payload checks.
+
 ---
 
 ### F-22: The device trusts the smartcard's own report of its PIN state
@@ -1738,6 +1858,27 @@ not previously paired.
    this being meaningful.
 4. Require confirmation of the resulting wallet fingerprint after each "Load key
    from smartcard".
+
+**My GPT-6 Sol review**
+
+- **Trust defect confirmed; automatic seed replacement is not.** A
+  card-supplied unlocked status bypasses the PIN loop
+  ([secureapplet.py](../../src/keystore/javacard/applets/secureapplet.py#L48)).
+  But the saved-key flag starts false
+  ([memorycard.py](../../src/keystore/memorycard.py#L46)), so that path does
+  not itself expose the load button or load an attacker seed
+  ([specter.py](../../src/specter.py#L199)). The claimed High funds-loss
+  chain and its severity need qualification unless another working route
+  is demonstrated.
+- **Fix gap:** forcing the UI PIN loop alone will not work if the applet's
+  `unlock` still short-circuits on the card's status. Authenticate/pin card
+  identity, require a verifiable PIN transition, and confirm wallet identity
+  when loading; do not assume a flash write counter is monotonic against a
+  flash-capable attacker.
+- **Test gap:** no emulated-card regression is provided. Exercise false
+  locked/unlocked reports, swaps during implicit reopen, PIN acceptance,
+  saved-key visibility, and whether *any* seed is loaded without a verified
+  transition.
 
 ---
 
@@ -1958,6 +2099,27 @@ but targeting the `secp256k1-embedded` usermod instead of the bootloader:
    rather than the interpreter already used for the other regression
    tests in this report.
 
+**My GPT-6 Sol review**
+
+- **Confirmed unsafe arithmetic; the write impact is conditional.** At
+  [the native rewind loop](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1821),
+  `length < 64` underflows an unsigned bound. If the backing stream instead
+  ends, zero-byte reads can hang the loop; reaching the arena boundary
+  requires sufficient bytes *beyond* the declared proof. The title's
+  out-of-bounds write is therefore a conditional consequence, not reproduced
+  by every short PSET.
+- **Fix gap:** validate both minimum length and available arena headroom in
+  native code *before* subtracting or reading, reject short reads, and return
+  an explicit malformed-PSET error. The Python check in the plan accepts
+  `length == memlen`, which the native scratch-offset check rejects;
+  [the caller](../../src/apps/wallets/liquid/wallet.py#L46) can then
+  misclassify a malformed proof as an unowned input.
+- **Test gap:** the suggested ASan regression is not implemented. A bounded
+  EOF fixture must time out rather than hang, an overrun fixture must include
+  enough trailing bytes to exercise the write, and a valid proof must still
+  rewind correctly. Reproduce the memory effect on target before asserting
+  exploitability.
+
 ---
 
 ### F-32: Boot-time USB hardening is applied last, and MicroPython's fault default is CDC+MSC
@@ -2163,6 +2325,25 @@ to secure a port-owned USB device.
 4. Longer term: patch the fork so `flash_error()` halts instead of returning for
    the frozen-`boot.py` failure case.
 
+**My GPT-6 Sol review**
+
+- **Verified fail-open boot ordering; fault trigger not established.**
+  Fallible I2C work precedes USB-off
+  ([boot.py](../../boot/main/boot.py#L19)); the port can continue after a
+  boot-script error with CDC+MSC as default
+  ([main.c](../../f469-disco/micropython/ports/stm32/main.c#L746)). Storage
+  mappings allow MSC writes, but actual fault induction, enumeration and
+  exploitation were not demonstrated on hardware.
+- **Fix gap:** the first proposed ordering diff still executes imports/path
+  handling before USB is disabled; use the combined earliest-safe ordering
+  and, preferably, a native USB-off default. Keep intended VCP use explicit
+  and test its [terminal setup](../../src/platform.py#L207). Swallowing
+  peripheral initialization errors with `except: pass` is not a fail-closed
+  boot policy.
+- **Test gap:** no boot-fault regression is provided. Inject early boot and
+  I2C faults and inspect actual USB interfaces plus read/write attempts to
+  both partitions on hardware; also verify normal VCP startup.
+
 ---
 
 ### F-05: USB exports arbitrary-path xpubs and the fingerprint without confirmation
@@ -2269,6 +2450,19 @@ interface-level opt-in.
    opt-in; it currently enumerates wallet names to any host.
 4. Bound the path depth here too — this handler is the reachable entry point for
    H-15 item 3.
+
+**My GPT-6 Sol review**
+
+- **Confirmed.** [The xpub handler](../../src/apps/xpubs/xpubs.py#L257)
+  can export a fingerprint or arbitrary-path xpub without `show_screen`;
+  wallet listing is also unconfirmed. This is an unlocked-device/host
+  privacy issue, not a private-key disclosure.
+- **Fix gap:** the suggested prompt shows the derivation path and fingerprint,
+  but not the xpub actually released. Bound path depth *before* deriving,
+  show the resulting xpub or an unambiguous digest, and require a distinct
+  approval for this export on every host transport.
+- **Test gap:** no approval/cancellation or pathological-path regression is
+  provided. Test both responses, all transports, and excessive depth.
 
 ---
 
@@ -2600,6 +2794,21 @@ blob format, or put it behind an explicit per-load integrity warning.
    always shown.
 4. Confirm the resulting wallet fingerprint after each card load.
 
+**My GPT-6 Sol review**
+
+- **Confirmed identity/origin gaps, with imprecise terminology.** The
+  [card public key](../../src/keystore/javacard/applets/securechannel.py#L52)
+  is reacquired on each fresh use, not persistently remembered after the
+  first one: this is trust on *every* use, rather than implemented TOFU.
+  [Public-constant blobs](../../src/keystore/memorycard.py#L171) lack a
+  device-origin check. Automatic attacker-seed loading is not shown.
+- **Fix gap:** a pinned key protects later implicit reopen only after a
+  trustworthy first pairing; it does not authenticate a card present during
+  enrollment or re-pairing. Require an independently authenticated identity
+  and explicit PIN/fingerprint confirmation at those transitions.
+- **Test gap:** described fake-card checks are not committed regression tests.
+  Add reboot, implicit-reopen, failed re-pair and forged-blob scenarios.
+
 ---
 
 ### F-08: Bootloader key selection is unrecorded in build output, and RDP1 is the default
@@ -2777,6 +2986,22 @@ something. Keep the RDP1 limitation documented next to the storage guarantees.
    irreversible is a legitimate reason not to enable it by default, but it
    should be stated where F-06's threat model is described.
 
+**My GPT-6 Sol review**
+
+- **Confirmed configuration risk, conditional physical impact.** The
+  [release script](../../build_firmware.sh#L23) selects RDP1 without
+  recording the signing keyset; the
+  [Makefile guard](../../bootloader/Makefile#L18) does fail closed when a
+  self-signed key file is missing. Source-level selection alone does not
+  establish practical extraction of a deployed device's signing keys.
+- **Fix gap:** a `keyset.txt` produced from source does not prove which
+  public keys the built *binary* actually contains. Verify or extract its
+  keys from the artifact, record release-key provenance, and make release
+  builds reject unexpected selections.
+- **Test gap:** assert keyset and RDP selection from the output artifact in
+  CI and exercise the self-signed-key failure path; hardware extraction
+  remains an explicitly untested prerequisite.
+
 ---
 
 ### F-10: `non_witness_utxo` parsing was not bounded to its declared field length
@@ -2867,6 +3092,19 @@ passes to produce the same scope boundaries and key set.
    `PSBTView` scanner see the same key set over identical bytes (§10.2 item 7).
 3. Confirm that upstream `embit` carries `ff98e0f`. If it does, F-10 needs no
    disclosure. If it does not, send it with F-04 (§12.2).
+
+**My GPT-6 Sol review**
+
+- **Resolved parser boundary, not a demonstrated theft.** The
+  [bounded reader](../../f469-disco/libs/common/embit/src/embit/psbt.py#L328)
+  enforces the declared length and exact consumption. A
+  [boundary test](../../f469-disco/libs/common/embit/tests/tests/test_parsing.py#L150)
+  exists; no live desynchronization should be claimed against this tree.
+- **Test gap:** the proposed same-bytes `InputScope`/`PSBTView` differential
+  and manager-rejection regressions are not present. Add both, including
+  truncated and overlong declared lengths, to pin the repaired boundary.
+  The existing 19 `embit` parsing tests, including `test_non_witness_boundary`,
+  pass locally using the pure-Python ECC fallback.
 
 ---
 
@@ -2982,6 +3220,21 @@ unknown and unblinded, and do not compute a trusted input summary from them.
    The same branch also clears `blinding_seed`, so no proofs are generated from
    unverified inputs.
 3. Do not compute or display a fee when any input amount is unverified.
+
+**My GPT-6 Sol review**
+
+- **Confirmed, and the proposed wallet-only check is incomplete.** In
+  [Liquid wallet scope filling](../../src/apps/wallets/liquid/wallet.py#L52),
+  absent proof offsets or already populated cleartext fields can bypass
+  commitment verification. [Manager totals](../../src/apps/wallets/liquid/manager.py#L355)
+  also include unknown-wallet inputs, which never reach that wallet check.
+- **Fix gap:** verify value/asset provenance for *every* input before
+  displaying totals, deriving a txseed, or signing; mark genuinely
+  unverifiable amounts unknown rather than presenting host-supplied fields
+  as fact. Wallet-specific checks alone cannot authenticate unknown inputs.
+- **Test gap:** no regression covers forged complete fields, absent
+  rangeproofs, unknown inputs, and valid explicit inputs together. Add all
+  four and assert displayed totals as well as signing decisions.
 
 ---
 
@@ -3203,6 +3456,22 @@ native code.
    ([builtinimport.c:136-138](../../f469-disco/micropython/py/builtinimport.c#L136-L138),
    [builtinimport.c:151-153](../../f469-disco/micropython/py/builtinimport.c#L151-L153)),
    and a CWD file loaded through `""` gets the same relative name.
+
+**My GPT-6 Sol review**
+
+- **Confirmed import risk if an attacker can write QSPI.** Boot imports
+  `os` before the ineffective path cleanup
+  ([boot.py](../../boot/main/boot.py#L3)); the port includes QSPI on
+  [the import path](../../f469-disco/micropython/ports/stm32/main.c#L716),
+  and platform subsequently imports `config`. A write primitive and
+  successful malicious import are prerequisites, not reproduced here.
+- **Fix gap:** `except ImportError` alone is not an origin check. Use the
+  proposed *combined* early path/CWD pinning plus frozen configuration
+  before any import that can resolve from QSPI, and preserve legitimate
+  frozen-module startup.
+- **Test gap:** boot with malicious `os.py`, `config.py` and a shadowing
+  directory in writable storage, then verify rejection and normal startup;
+  no such boot regression exists.
 
 ---
 
@@ -3435,6 +3704,21 @@ check. Refuse to generate a mnemonic if it fails.
 4. Keep `_looks_dead` after the driver is fixed. It is cheap, and it is the only
    check that survives a driver that reports success while producing garbage.
 
+**My GPT-6 Sol review**
+
+- **Confirmed native fail-open behavior, conditional seed risk.**
+  [rng_get](../../f469-disco/micropython/ports/stm32/rng.c#L33) returns zero
+  on timeout; [os.urandom](../../f469-disco/micropython/ports/stm32/moduos.c#L101)
+  discards most bytes of each word. The applied
+  [Python liveness check](../../src/rng.py#L96) detects obvious stalls,
+  not hardware error flags, bias, or a known-initial-pool compromise.
+- **Fix gap:** the native sketch must consume full words and propagate
+  timeout/`SECS`/`CECS` failures through *all* RNG interfaces, including
+  `pyb.rng()`. Fixing only the Python wrapper leaves a fail-open native API.
+- **Test gap:** the existing [RNG tests](../../test/tests_native/test_rng.py#L24)
+  cover the software liveness filter, not native error propagation. Inject
+  each error on target and check entropy use in new-seed generation.
+
 ---
 
 ### F-19: Confirmation buttons stay fixed while security-critical text scrolls
@@ -3603,6 +3887,22 @@ output list.
    the change filter skips at
    [transaction.py:73-79](../../src/gui/screens/transaction.py#L73-L79) ([L73](../../src/gui/screens/transaction.py#L73)) so
    `"%d change outputs not shown"` can be rendered (see F-24).
+
+**My GPT-6 Sol review**
+
+- **Confirmed layout risk; pixel claims are not measured.** Prompt buttons
+  sit outside the [scrolling page](../../src/gui/screens/prompt.py#L16),
+  and [fee rendering](../../src/gui/screens/transaction.py#L68) follows
+  attacker-sized output content. The claim that the first warning must
+  remain visible (or that exactly three outputs fill a viewport) is not
+  proven if warnings or fonts themselves overflow.
+- **Fix gap:** fixed labels alone require an actual screen-space budget.
+  Gate approval on review of the last security-critical content, including
+  relevant details, and preserve accessible confirmation/cancellation.
+- **Test gap:** [the native AST test](../../test/tests_native/test_transaction_confirmation.py#L113)
+  passes but tests which outputs are skipped, not rendered visibility.
+  Measure scroll bounds, long warnings, fee location and button state on
+  target or a faithful LVGL simulator.
 
 ---
 
@@ -3892,6 +4192,20 @@ to short printable ASCII.
    refused; a registry file holding either entry loads with `LBTC` intact; a
    user label renders as `X (abcd...ef01)`.
 
+**My GPT-6 Sol review**
+
+- **Confirmed host-controlled labeling; report correction is not a fix.**
+  [addasset](../../src/apps/wallets/liquid/manager.py#L129) can overwrite
+  labels and [persisted entries](../../src/apps/wallets/liquid/manager.py#L598)
+  override seeded names. Actual deception still requires an earlier
+  user-approved label import.
+- **Fix gap:** reserve trusted IDs/names and display an asset-ID fragment
+  beside any untrusted name. If old saved labels are ignored, define a
+  visible migration/notification rather than silently dropping user data.
+- **Test gap:** cover both label-import paths, poisoned persisted entries,
+  duplicate reserved names, and display after reload; no such end-to-end
+  regression is supplied.
+
 ---
 
 ### F-24: The transaction screen is incomplete by default
@@ -4001,6 +4315,23 @@ values on the default page, or at least an "N change outputs not shown" line.
    [:197](../../src/gui/screens/transaction.py#L197).
 3. Count the outputs skipped by the change filter and render
    `"%d change outputs not shown"` on the default page.
+
+**My GPT-6 Sol review**
+
+- **Confirmed screen gap, with partial output remediation.** The manager
+  [computes the fee](../../src/apps/wallets/manager.py#L986), but
+  [TransactionScreen](../../src/gui/screens/transaction.py#L73) hides
+  verified change on the default page and omits a zero fee. The narrowed
+  change-classification rules do not authenticate witness-only input amounts
+  (F-03).
+- **Fix gap:** a host-derived fee percentage or threshold is not a
+  compensating control if inputs are unverified. Show the skipped-change
+  count and zero/negative/unverified fee states, and make relevant warnings
+  unavoidable before approval; retain the legitimate verified-change
+  behavior rather than simply displaying every change output.
+- **Test gap:** the existing screen AST test checks only the skip guard.
+  Add real rendered-state and fee-threshold boundary tests, including
+  witness-only inputs and transaction-detail review.
 
 ---
 
@@ -4135,6 +4466,22 @@ start and every upgrade exit.
    sector.
 4. Have `make-initial-firmware.py` document that a factory-flashed device has
    RDP1 but no WRP until the first successful upgrade.
+
+**My GPT-6 Sol review**
+
+- **Confirmed authenticity gap under the stated prior-compromise model.**
+  [Boot records](../../bootloader/core/bl_integrity_check.h#L47) contain
+  CRCs, and [boot validation](../../bootloader/core/bl_integrity_check.c#L65)
+  does not verify a firmware signature. CRC detects accidental damage, not
+  an attacker who can change code and recompute the record.
+- **Fix gap:** a MAC keyed by a secret stored in writable/readable flash
+  does not withstand the finding's prerequisite of prior code execution:
+  that code can copy or replace the key. Verify a signature against an
+  immutable trust root on every boot and specify upgrade/recovery behavior.
+  Source/release files alone do not prove deployed factory WRP settings.
+- **Test gap:** current [integrity tests](../../bootloader/test/test_bl_integrity_check.cpp#L73)
+  cover corruption, not attacker-recomputed CRCs. Add a modified payload
+  *and* recomputed record rejection test plus on-device provisioning checks.
 
 ---
 
@@ -4279,6 +4626,21 @@ file behind and a second `result()` call would return it. Use
    ignored" docstring.
 3. Apply H-08 (bytewords range validation) and H-13 (`assert` → `raise`) in the
    same change; all three protect the same parser.
+
+**My GPT-6 Sol review**
+
+- **Confirmed missing integrity checks, not cryptographic authentication.**
+  [Multipart UR decoding](../../f469-disco/libs/common/microur/decoder.py#L58)
+  omits per-part bytewords CRC and assembled-message CRC comparisons;
+  [single-part decoding](../../f469-disco/libs/common/microur/decoder.py#L51)
+  has a check. An attacker choosing all frames can recompute unkeyed CRCs,
+  so do not claim this fix authenticates a hostile payload.
+- **Fix gap:** check exact fragment lengths/reads and per-part CRCs, then
+  verify the final message checksum *before* returning or dispatching bytes.
+  Handle repeated `result()` calls consistently after success or failure.
+- **Test gap:** scratch tests mentioned in the report are not committed.
+  Add valid round trips, altered/truncated parts, mismatched assembled CRC,
+  and repeated-result regressions.
 
 ---
 
@@ -4440,6 +4802,22 @@ and make Cancel the affirmative button.
 4. Separately, add `SIGHASH.DEFAULT` (`0x00`) to `SIGHASH_NAMES` so Taproot
    PSBTs are not rejected with "Unknown sighash type: 0!" — availability, not
    security.
+
+**My GPT-6 Sol review**
+
+- **Confirmed loose sighash policy; the proposed confirmation change is
+  unsafe as written.** Bitcoin accepts
+  [six custom modes](../../src/apps/wallets/manager.py#L37). If the sketch
+  changes confirmation to `if not confirm`, a `None` dismissal also falls
+  through to signing. Its blanket "does NOT commit to outputs" warning is
+  false for `ALL|ANYONECANPAY` and `SINGLE`.
+- **Fix gap:** reject `NONE` variants in Bitcoin *and* Liquid if unsupported;
+  retain fail-closed dismissal/cancellation, give precise per-mode warnings,
+  and reject invalid `SINGLE` output indexes. Account for Liquid
+  `RANGEPROOF` flags and Taproot `DEFAULT` rather than treating every custom
+  sighash alike.
+- **Test gap:** no dismissal, mixed/all-custom, invalid-`SINGLE`, Liquid
+  variant or Taproot regression accompanies the proposed UI change.
 
 ---
 
@@ -4634,6 +5012,21 @@ erase-and-copy stage. Report protection state on failure.
 3. Reassert WRP for the firmware and bootloader regions in `blsys_init()` on
    every boot, so a device that was left unprotected recovers at next power-on.
 
+**My GPT-6 Sol review**
+
+- **Confirmed sequencing; persistent hardware effect remains unmeasured.**
+  [The upgrade path](../../bootloader/core/bootloader.c#L1231) unprotects
+  flash before copying and signature verification, and
+  [restoration](../../bootloader/core/bootloader.c#L1271) is conditional on
+  success.
+- **Fix gap:** the shown restore-before-alert patch covers one signature
+  failure, and only with `WRITE_PROTECTION` enabled. Erase/copy/hash/fatal
+  paths still bypass it. Authenticate the candidate before unprotecting,
+  keep post-copy validation, and enforce WRP at boot and at every exit.
+- **Test gap:** fault-inject each failure and reboot to inspect actual
+  option bytes; source-level call order alone does not prove persistent
+  state on deployed hardware.
+
 ---
 
 ### F-34: Smartcard receive drains one byte past its stack buffer
@@ -4779,6 +5172,19 @@ T=1 timing with a smartcard emulator under the release toolchain.
 3. Restore `-Wall` (H-22) and fuzz ATR/T=1 timing with a card emulator under the
    release toolchain — this defect and H-23 are both in classes
    `-Wall -Werror` would surface.
+
+**My GPT-6 Sol review**
+
+- **Confirmed native off-by-one, impact conditional on available card bytes.**
+  [The receive loop](../../f469-disco/usermods/scard/ports/stm32/scard_io.c#L333)
+  uses `<= nbytes`; [blocking callers](../../f469-disco/usermods/scard/connection.c#L656)
+  supply a 32-byte stack buffer. A 33rd non-skipped byte can therefore be
+  written out of bounds, but stack control-flow consequences are unproven.
+- **Fix gap:** changing `<=` to `<` prevents the write. Caller-side length
+  checks run *after* the buffer has been touched and are only defense in
+  depth. `-Wall -Werror` does not establish this runtime boundary is safe.
+- **Test gap:** add a canary/ASan 32-vs-33-byte regression and card-timing
+  tests under realistic UART framing; repeat the fault analysis on target.
 
 ---
 
@@ -5030,6 +5436,23 @@ reachable.
    SCRIPT" rather than rendering bare hex where an address normally appears.
    This also fixes H-25.
 
+**My GPT-6 Sol review**
+
+- **Confirmed script-type mismatch; direct theft remains conjectural.**
+  [Liquid address encoding](../../f469-disco/libs/common/embit/src/embit/liquid/addresses.py#L19)
+  treats unsupported scripts as witness programs. The proposed script-type
+  gate prevents that misencoding; restoring
+  [blech32 decoder](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L112)
+  length checks alone cannot.
+- **Fix gap:** the suggested generic Bitcoin-address fallback can yield an
+  ordinary address or `None`, not the promised warning about an unrecognized
+  confidential script. Explicitly reject or label unsupported output
+  scripts at the display call site rather than silently presenting a
+  misleading destination.
+- **Test gap:** test valid confidential script types, OP_RETURN and other
+  unsupported scripts, invalid versions/lengths, collision cases, and
+  actual on-screen display behavior.
+
 ---
 
 ### F-09: The ARM compiler archive is pinned with a legacy MD5 digest
@@ -5135,6 +5558,22 @@ immutable release URL. Prefer authenticated, reproducible toolchain inputs.
 2. Or make the Nix flake the release build path, so the toolchain comes from a
    content-addressed store with a `flake.lock` narHash, and retire the
    Dockerfile's independent download.
+
+**My GPT-6 Sol review**
+
+- **Valid hardening finding.** [Dockerfile:12](../../Dockerfile#L12) checks a
+  fixed MD5 digest; the report correctly avoids claiming a practical
+  second-preimage attack against this particular pin.
+- **Fix gap:** the action-plan diff is not executable with
+  `<digest-source>`, `<immutable-release-url>`, and `<sha256>` unfilled. Verify
+  the present archive against the existing MD5, independently obtain or
+  calculate and record its SHA-256, then replace the check and pin the exact
+  artifact. A URL alone is not proof of immutability; the verified SHA-256 is
+  the content constraint. If adopting Nix instead, first establish that its
+  output is the release build, not just a development environment.
+- **Test gap:** no migration regression is supplied. Build with the approved
+  archive and confirm an altered archive fails the SHA-256 check before
+  extraction.
 
 ---
 
@@ -5289,6 +5728,28 @@ raises `MemoryError` on failure
 `free` → `gc_free` mapping still matches. A raise partway through a function
 leaves earlier buffers unreferenced on the GC heap, and the next collection
 frees them.
+
+**My GPT-6 Sol review**
+
+- **Valid, with separate reachability.** The callbacks
+  [return](../../f469-disco/usermods/secp256k1/mpy/config/ext_callbacks.c#L1),
+  but this binding uses a preallocated context. The unchecked binding
+  allocations are independently reachable in
+  [ec_pubkey_combine](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L713)
+  and [pedersen_blind_generator_blind_sum](../../f469-disco/usermods/secp256k1/mpy/libsecp256k1.c#L1217).
+  Heap exhaustion can cause a native fault; no exploitable heap-exhaustion
+  trigger or funds impact is established, so retain Low pending target tests.
+- **Fix gap:** changing binding `malloc` to `m_malloc` handles nonzero
+  allocation failure ([malloc.c:85](../../f469-disco/micropython/py/malloc.c#L85)).
+  The callback diff instead raises a MicroPython exception from library
+  callbacks; its own NLR caveat means it is **not** a safe unconditional
+  fail-closed recipe. Use an application-available fatal/reset path that never
+  returns, or prove every callback context has a valid NLR boundary before
+  proposing a raise.
+- **Test gap:** no allocation-failure regression exists. Inject failed
+  allocations into each live binding call and exercise both callback paths on
+  the target; verify controlled failure rather than a NULL dereference or a
+  returning callback.
 
 ---
 
@@ -5448,6 +5909,27 @@ auxiliary randomness for Schnorr signing.
 5. Call `secp256k1.context_randomize` at boot and after each unlock, and pass
    auxiliary randomness to Schnorr signing.
 
+**My GPT-6 Sol review**
+
+- **Valid hardening concern, not a demonstrated key leak.** The
+  [production manifest](../../src/apps/__init__.py#L1) includes `getrandom`;
+  [get_random_bytes](../../src/rng.py#L96) checks for obvious stalls but
+  returns raw TRNG output above 64 bytes. The existing
+  [RNG tests](../../test/tests_native/test_rng.py#L132) pass (checked), and one
+  explicitly *asserts* this raw-export behavior. Requests below four bytes
+  skip the liveness test, so the boot-seeding requirement matters.
+- **Fix gap:** call `seed_pool()` before *any* use of the RNG, fail closed on
+  boot failure, and specify how each 64-byte output chunk advances the pool
+  and consumes fresh checked entropy; merely deleting the `nbytes > 64`
+  shortcut cannot make SHA-512 produce more than 64 bytes. The Schnorr
+  recommendation needs changes beyond the boot hook:
+  [embit.ec.PrivateKey.schnorr_sign](../../f469-disco/libs/common/embit/src/embit/ec.py#L234)
+  currently passes no auxiliary data to the native signing API.
+- **Test gap:** replace the test that expects raw bytes with a pool-mixing
+  regression at 65 and 1000 bytes. Add failure-injection tests for boot
+  seeding, confirmation of host exports, and on-target tests for TRNG failure
+  and context randomization.
+
 ---
 
 ### F-16: Animated QR reassembly accepts invalid indexes and weakly binds frames
@@ -5569,6 +6051,27 @@ fixes from F-28 at the same time.
    ([manager.py:229-237](../../src/apps/wallets/manager.py#L229-L237): read
    the hash instead of skipping it, and pass it as `checksum`) before dispatch, and apply F-28's UR-level fixes at the same time.
 5. Remove the `print(prefix)`.
+
+**My GPT-6 Sol review**
+
+- **Valid parser defect.** [parse_prefix](../../src/hosts/qr.py#L552)
+  accepts `p0ofN`, which indexes the last part, and `p0of0`, which can leave
+  `animated` set on failure. The BCUR receiver compares frame hash *strings*
+  but [the wallet manager](../../src/apps/wallets/manager.py#L226) skips the
+  assembled hash; `bcur_decode_stream` checks its own polymod even when that
+  optional shared hash is absent
+  ([bcur.py:130](../../f469-disco/libs/common/bcur.py#L130)).
+- **Fix gap:** the guard and initialization ordering are sound. Item 3 as
+  written cannot work with legacy `pMofN` frames: hashing the *first frame's
+  payload prefix* gives no session ID that later, different frames can carry.
+  Define a new frame format with a common payload digest/ID (and verify the
+  assembled digest), or reject concurrent legacy sessions and clearly state
+  the remaining mix-up risk. Bound `N` before allocating the parts list. Do
+  not silently reinterpret malformed `pMofN`-shaped frames as plain payload
+  in `process_normal`.
+- **Test gap:** no QR/BCUR regression was found. Test `p0ofN`, `p0of0`,
+  oversized `N`, mixed equal-`N` frames, mismatched BCUR assembled hash, and
+  successful valid single/multipart decoding.
 
 ---
 
@@ -5717,6 +6220,24 @@ rejects versions above 16 and programs outside 2-40 bytes, so the F-35
    `_wit_script` becomes the only guard.
 3. Add a round-trip test: for each supported Liquid descriptor type, assert
    `addr_decode(address(spk, bkey))[0].data == spk.data`.
+
+**My GPT-6 Sol review**
+
+- **Confirmed.** A local round trip with `OP_1 PUSH32` returned
+  `OP_0 PUSH32` instead: [addr_decode](../../f469-disco/libs/common/embit/src/embit/liquid/addresses.py#L41)
+  ignores `ver` in both branches. The proposed `_wit_script` reconstructs the
+  correct opcode and rejects out-of-range versions/program lengths.
+- **Fix gap:** treating F-35's decoder validation as the only prerequisite
+  misses versioned confidential-address checksums. The current
+  [blech32 encoder/decoder](../../f469-disco/libs/common/embit/src/embit/liquid/blech32.py#L30)
+  only supports the original blech32 checksum; to interoperate with v1
+  addresses, add blech32m encode/decode (or explicitly reject v1 Liquid
+  descriptors until supported). Do not claim complete v1 address verification
+  after merely fixing script reconstruction.
+- **Test gap:** the report proposes but does not supply a regression. Test
+  confidential and unconfidential v0/v1 address round trips, standard v1
+  checksum interoperability, and rejection of invalid versions and program
+  lengths.
 
 ## 7. Additional security-relevant behavior and hardening items
 
@@ -6775,7 +7296,7 @@ Two consequences, neither exploitable today:
 
 ## 8. Assessment by security domain
 
-### 8.1 Malware and backdoor assessment
+### 8.1 Malware and backdoor
 
 A sweep across `src/`, `boot/`, `embit`, `microur`, and `bcur.py` looked for
 `eval`, `exec`, `compile`, `__import__`, `importlib`, reflection, `subprocess`,
@@ -6873,7 +7394,7 @@ environment.
   read in full. Target SDRAM adjacency and timing/side-channel behavior remain
   dynamic questions.
 
-### 8.3 Private-key and secret-memory assessment
+### 8.3 Private-key and secret-memory
 
 No normal host command returns the root private key, the mnemonic, the identity
 key, a child private key, or a signing nonce. Mnemonic display and BIP85 are
@@ -6892,7 +7413,7 @@ the mnemonic, root, SLIP77 key, identity key, device secret, `pin_secret`, and
 signing unreachable (PATH-22), but a locked running process still contains
 decrypted key material. Only wipe or reboot ends that process lifetime.
 
-### 8.4 Transaction-signing assessment
+### 8.4 Transaction-signing
 
 The Bitcoin display/signing boundary is broken in two places, neither of them a
 parser override. F-03 breaks it in the value-destruction direction: an input
@@ -6966,12 +7487,13 @@ of a seed-substitution phishing attack. The menu already has an explicit "Import
 recovery phrase" entry, and host streams should not be interpreted as mnemonics
 outside it.
 
-### 8.5 Parser assessment
+### 8.5 Parser
 
 The most consequential parser root cause is accepting PSBT v2-only fields in v0
 scopes. The unbounded `non_witness_utxo` value parse caused cross-pass
-desynchronization until embit `ff98e0f` bounded it (F-10, resolved). Legacy animated QR accepts invalid indexes and weakly binds
-frames. The UR side adds a second parser weakness: the fountain decoder never
+desynchronization until embit `ff98e0f` bounded it (F-10, resolved). Legacy animated QR accepts invalid indexes and weakly binds frames.
+
+The UR side adds a second parser weakness: the fountain decoder never
 verifies any checksum (F-28), the bytewords decoder silently maps
 out-of-alphabet characters to wrong bytes (H-08), and all of that validation is
 written with bare `assert` (H-13). No reviewed parser defect independently
@@ -7055,7 +7577,7 @@ overflow in F-34 and the broken PPS checksum in H-23. RDP1 resistance, exact F-3
 target stack effects, and external applet PIN enforcement need hardware or applet
 review.
 
-### 8.7 Build and supply-chain assessment
+### 8.7 Build and supply-chain
 
 Submodule gitlinks are immutable and match the reviewed checkouts, so a normal
 recursive clone or `git submodule update` gets exactly the code reviewed here.
@@ -7079,17 +7601,7 @@ Material gaps and hardening items:
 - no empirical reproducibility check: two clean Docker builds were not compared
   with each other or with any official release binary.
 
-### 8.8 Physical-attack assessment
-
-This review cannot settle physical security. The highest-impact chains are
-internal-flash readout into offline PIN recovery, direct QSPI writes into F-15, an
-inducible boot fault exposing both partitions through F-32, smartcard
-substitution and native corruption (F-34), entropy and nonce side channels, and
-RAM/SDRAM remanence. RDP1 bypass feasibility, I2C fault inducibility, option-byte
-behavior, malicious-card timing, and post-wipe QSPI recovery on the deployed
-board remain unresolved.
-
-### 8.9 Dependency assessment
+### 8.8 Dependencies
 
 Outer dependency pins and identified vendored trees show no substitution. The
 interpreter fork delta is reviewed. The remaining provenance gap is inside that
@@ -7183,6 +7695,17 @@ this is dependency exposure rather than a product vulnerability.
 `cryptography`, verify `upgrade-generator.py`, `make-initial-firmware.py`, and
 the new `introspect-binary.py` against it, and add a scheduled advisory check
 (`pip-audit` in CI) so the pin does not silently age again.
+
+
+### 8.9 Physical-attack
+
+This review cannot settle physical security. The highest-impact chains are
+internal-flash readout into offline PIN recovery, direct QSPI writes into F-15, an
+inducible boot fault exposing both partitions through F-32, smartcard
+substitution and native corruption (F-34), entropy and nonce side channels, and
+RAM/SDRAM remanence. RDP1 bypass feasibility, I2C fault inducibility, option-byte
+behavior, malicious-card timing, and post-wipe QSPI recovery on the deployed
+board remain unresolved.
 
 ### 8.10 Security-model discrepancies
 
@@ -8173,8 +8696,7 @@ Still to do:
 
 1. Establish whether `embit` upstream has fixed F-04, F-10, F-35, or F-36, to
    set the embargo clock for the coordinated disclosure in §12.2. The pinned
-   fork fixes F-10 (`ff98e0f`); whether upstream carries that commit is
-   unverified.
+   fork fixes F-10 (`ff98e0f`).
 2. Fetch official release metadata, signatures, and binaries. Run two
    clean `linux/amd64` Docker builds from this exact tree, compare their main
    firmware, bootloader, initial-firmware, and unsigned-upgrade hashes, then

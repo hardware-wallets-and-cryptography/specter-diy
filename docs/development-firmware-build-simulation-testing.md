@@ -128,3 +128,12 @@ This secondary suite uses stubbed hardware modules and runs on standard CPython 
 ```sh
 cd test && python3 run_native_tests.py
 ```
+
+### Security finding evidence (expected to fail)
+The separate evidence suite exercises the still-open software behaviors in audit findings F-03, F-04, F-06, F-17, F-18, F-19, F-21, F-22, F-23, F-24, F-25, and F-28. It runs CPython tests, a host-compiled STM32 RNG driver with mocked peripheral registers, and focused bootloader C tests using a host C/C++ compiler and `make`:
+
+```sh
+python3 test/evidence/run.py
+```
+
+The assertions express the desired security properties, so this command exits nonzero while those findings remain open. It is intentionally excluded from normal CI and `run_native_tests.py`; do not mark these tests as expected failures. F-03 and F-04's already-passing checks remain in the normal native suite, while their open fee-provenance and script-commitment cases run here. F-17 signs a test-key message using the application's hashing method and checks the result with the production bootloader C verifier; its separate Python test enforces the interim policy of refusing release-format messages. F-21's previously fixed embedded-NUL case remains in the normal native suite; the evidence suite tests its remaining frame (requiring hex display for a forged delimiter) and address-mapping issues. F-18 tests driver status reporting on timeout, seed, and clock faults with mocked registers and Python-layer error propagation, not physical entropy or every native RNG caller. F-19 and F-24 run the actual screen code against a simplified geometry/widget model; LVGL layout and scrolling still require device validation. F-23 exercises an approved host import and subsequent persisted-label reload; F-25 models an attacker with flash write access recomputing both CRCs; F-28 checks both multipart CRC layers. Offline PIN recovery here assumes a flash dump, and the card stubs do not prove physical readout or real smartcard behavior. After a fix, move applicable passing property tests into the normal regression suite; the F-17 interim refusal test can instead be retired once the signing domains are separated.

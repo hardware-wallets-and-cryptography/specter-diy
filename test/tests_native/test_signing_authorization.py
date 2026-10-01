@@ -18,18 +18,7 @@ from tests.util import get_keystore, get_wallets_app, clear_testdir
 
 
 class UnverifiedInputAmountTest(TestCase):
-    """
-    F-03 (audit.md): manager.preprocess_psbt() calls
-    inp.verify(ignore_missing=True) and discards the return value, so an
-    input whose amount cannot be authenticated (no non_witness_utxo, only
-    witness_utxo) is trusted as-is and silently feeds the displayed fee.
-    `is_verified` is never surfaced to `meta`, so nothing tells the caller
-    the amount is unverified.
-
-    This test encodes the fix from the audit's action plan (manager.py
-    must record an unverified amount in `meta`/`metainp`). It fails today
-    because manager.py:654 drops the result of `inp.verify()`.
-    """
+    """F-03: unverified input amounts must be flagged in input metadata."""
 
     def setUp(self):
         clear_testdir()
@@ -51,10 +40,7 @@ class UnverifiedInputAmountTest(TestCase):
             vout=[TransactionOutput(90000, script.p2wpkh(pub))],
         )
         psbt = PSBT(tx)
-        # Attacker-controlled input: only witness_utxo is supplied. BIP143
-        # commits to this input's own amount, not to any other input's, so
-        # nothing here proves the claimed value (100000) is real - that is
-        # exactly what non_witness_utxo + verify() exist to check.
+        # Without non_witness_utxo, the claimed value cannot be authenticated.
         psbt.inputs[0].witness_utxo = TransactionOutput(100000, script.p2wpkh(pub))
 
         wallets, meta = self.manager.preprocess_psbt(
@@ -70,22 +56,8 @@ class UnverifiedInputAmountTest(TestCase):
             "verified against non_witness_utxo (F-03); meta was: %r" % (meta,),
         )
 
-
 class DerivedKeySigningOracleTest(TestCase):
-    """
-    F-04 (audit.md): before the fix, PSBTView.sign_input() checked script
-    membership for the root key (`sec in sc.data or pkh in sc.data`) but
-    applied no equivalent check to the derived-key loop right below it. A
-    host that knew any device xpub could request a signature under a key
-    at any derivation path it picked, over an input script that never
-    contained that key at all.
-
-    This test encodes the fix from the audit's action plan (the derived
-    loop in psbtview.py must skip keys absent from the script). Before the
-    fix it failed because manager.sign_psbtview() -> keystore.sign_input()
-    -> PSBTView.sign_input() signed unconditionally for every
-    bip32_derivation entry whose fingerprint matched the device.
-    """
+    """F-04: keys absent from input scripts must not be signed."""
 
     def setUp(self):
         clear_testdir()
