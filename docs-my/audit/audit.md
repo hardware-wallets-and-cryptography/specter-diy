@@ -97,18 +97,18 @@ impact stay open.
     	path = f469-disco
     	url = https://github.com/hardware-wallets-and-cryptography/f469-disco.git
    -	branch = dev
-   +	branch = dev  # pinned SHA: 59aa8ef34fd2031b0bd889f722fb4830fa92d1fc
+   +	branch = dev  # pinned SHA: 59aa8ef34f
    ```
 
-   This must be kept in sync by hand on every re-pin; it will drift silently
+   This must be kept in sync by hand on every re-pin. It will drift silently
    if a maintainer bumps the gitlink without updating the comment. Prefer
    dropping `branch =` (main option above) unless the convenience is worth
    that maintenance cost.
 
-2. Record, for each of the six forked submodules, that the pinned SHA exists in
-   the fork **and** its relation to the corresponding upstream commit. Keep the
-   result in the repository — a `DEPENDENCIES.md` table or a CI check — so the
-   next reader does not have to re-derive it. `f469-disco` and `embit` are
+2. Record, for each of the eight forked submodules, that the pinned SHA exists
+   in the fork **and** its relation to the corresponding upstream commit. Keep
+   the result in the repository — a `DEPENDENCIES.md` table or a CI check — so
+   the next reader does not have to re-derive it. `f469-disco` and `embit` are
    expected to be ahead of upstream; the others should be identical or the
    divergence explained. See PATH-18.
 
