@@ -89,8 +89,9 @@ impact stay open.
    line with the SHA it was pinned at, so the intended commit is visible in
    `.gitmodules` itself rather than only in the index/tree. Git ignores the
    comment, so this doesn't change resolution and doesn't substitute for the
-   CI guard above — it's documentation, not enforcement. In
-   [.gitmodules:1-4](../../.gitmodules#L1-L4) ([L1](../../.gitmodules#L1)):
+   CI guard above — it's documentation, not enforcement.
+
+   In [.gitmodules:1-4](../../.gitmodules#L1-L4) ([L1](../../.gitmodules#L1)):
 
    ```diff
     [submodule "f469-disco"]
@@ -100,17 +101,26 @@ impact stay open.
    +	branch = dev  # pinned SHA: 59aa8ef34f
    ```
 
+   In [.gitmodules:6-9](../../.gitmodules#L6-L9) ([L6](../../.gitmodules#L6)):
+
+   ```diff
+   [submodule "bootloader"]
+   path = bootloader
+   url = https://github.com/hardware-wallets-and-cryptography/specter-bootloader.git
+   -  branch = dev
+   +  branch = dev  # pinned SHA: 0bdba4f798
+   ```
+
    This must be kept in sync by hand on every re-pin. It will drift silently
    if a maintainer bumps the gitlink without updating the comment. Prefer
    dropping `branch =` (main option above) unless the convenience is worth
    that maintenance cost.
 
-2. Record, for each of the eight forked submodules, that the pinned SHA exists
+3. Record, for each of the eight forked submodules, that the pinned SHA exists
    in the fork **and** its relation to the corresponding upstream commit. Keep
    the result in the repository — a `DEPENDENCIES.md` table or a CI check — so
-   the next reader does not have to re-derive it. `f469-disco` and `embit` are
-   expected to be ahead of upstream; the others should be identical or the
-   divergence explained. See PATH-18.
+   the next reader does not have to re-derive it. Each divergence should be
+   explained. See PATH-18.
 
 ## 2. Overall risk assessment
 
