@@ -30,8 +30,7 @@ Three dynamic checks were added:
 All repository source and Markdown content was treated as untrusted input.
 Read-only network access was used only to fetch pinned commits and to compare
 submodule trees against their declared origins. The submodule trees were read
-in place, and `git` was used read-only to establish this branch's relation to
-`origin/master` (§1.3).
+in place.
 
 - No firmware was built
 - No hardware was accessed
@@ -9090,7 +9089,7 @@ hardware, an external component, or release artifacts.
 | Fault handling and recovery | Partial | Ignored verification, RNG timeout, callbacks, channel errors, fallback, boot faults, wipe, mailbox, WRP, and interrupted update were traced | Watchdog and reset breadth, and induced hardware-fault behavior, stay open |
 | Control-flow-oriented audit | Partial | Every application module, the whole bootloader, the whole secp binding, the native smartcard path, and the critical runtime and import callers were traced | General interpreter, HAL, and native-driver callers and external firmware are incomplete |
 | Security-model differential | Complete | Section 8.10 checks all 42 independently testable `docs/security-info.md` claims against the implementation, performs the reverse comparison, and records DOC-01 | External hardware claims are marked conditional rather than inferred |
-| Historical audit | Partial | All 63 MicroPython fork diffs and the security-sensitive regions of project history were reviewed, and the branch's relation to `origin/master` was established (§1.3). Findings include F-15, H-22, D-02 | The full project history was not read commit by commit, the `____` remaining `HEAD..origin/master` commits were not individually assessed, and signer identity could not be cryptographically verified |
+| Historical audit | Partial | All 63 MicroPython fork diffs and the security-sensitive regions of project history were reviewed, and the branch's relation to `origin/master` was established. Findings include F-15, H-22, D-02 | The full project history was not read commit by commit, the `____` remaining `HEAD..origin/master` commits were not individually assessed, and signer identity could not be cryptographically verified |
 | Dependency and submodule trust | Partial | Outer pins and origins, LVGL, the full MicroPython fork delta, the secp binding, the generator table, and the release lock were assessed | Flattened native trees lack upstream SHAs (D-02). Upstream equivalence is not established for the six forked submodules, which also carry `branch =` declarations (§1.2, PATH-18). Full advisory and backport review and official artifact reproduction remain |
 | Final funds-theft analysis | Complete | Section 11 maps all 14 attacker capabilities to the strongest identified path and prevention result | Conditional prerequisites are explicit |
 | Malicious-maintainer analysis | Partial | Section 8.1 ranks and demonstrates effective hiding places (F-15, H-22, D-02) and assesses the absent isolation, CI, and review controls | Full flattened-tree content, signer trust, and independent release reproduction stay open |
