@@ -124,27 +124,6 @@ impact stay open.
 
 ## 2. Overall risk assessment
 
-**Overall risk: High.**
-
-No Critical finding is open. The rating is set by four High items that each
-break a boundary the device's whole security argument rests on:
-
-1. **F-03 — displayed input amounts are not authenticated.** `inp.verify()`'s
-   return value is discarded, so a multi-input, multi-session SegWit miner-fee
-   attack can collect individually valid signatures while every session shows a
-   small fee. The user loses the difference to a miner.
-2. **F-04 — derived keys are signed without a script-membership check.** A host
-   that knows any device xpub can obtain an ECDSA signature under a key at any
-   derivation path it picks, over a sighash it builds. This is a signing oracle,
-   and F-05 supplies the unconfirmed xpub needed to construct the request.
-3. **F-31 — a short PSET rangeproof reaches an out-of-bounds native write before
-   confirmation.** Unsigned arithmetic underflows the streaming rewind loop,
-   which writes attacker bytes past a fixed SDRAM arena. Pre-authorization
-   memory corruption on a signing device.
-4. **F-21 — message signing displays less than it signs.** A NUL byte truncates
-   the drawn text but not the hashed bytes, and the `.decode("ascii")` guard does
-   not check ASCII. F-17 makes the same prompt a firmware-authorization prompt.
-
 The display is this device's only authorization boundary, and three separate
 findings break it in different places:
 - F-03 on input amounts and the fee,
@@ -215,7 +194,7 @@ load-bearing for the confirmation model.
 
 Ordered by attacker gain, then by impact.
 
-1. **High: F-03 — `inp.verify()` failures are ignored.** A multi-input,
+1. **High: F-03 — displayed input amounts are not authenticated. `inp.verify()` failures are ignored.** A multi-input,
    multi-session SegWit miner-fee attack can collect individually valid
    signatures while each session shows a small fee. The return value of the
    verification call is discarded in this repository's wallet manager, and
@@ -225,80 +204,81 @@ Ordered by attacker gain, then by impact.
    path whose public key it knows, even when that key is absent from the input
    script. F-05 supplies the unconfirmed arbitrary-path xpub oracle needed to
    build the request.
-3. **High: F-31 — a short Liquid rangeproof length reaches an out-of-bounds
+3. **High: F-31 — a short Liquid (PSET) rangeproof length reaches an out-of-bounds
    native write before confirmation.** Unsigned arithmetic underflows the
    streaming rewind loop, which then writes attacker bytes past a fixed SDRAM
    arena. No key-extraction chain was established, but this is a pre-auth memory
    corruption primitive on a signing device.
+
 4. **High: F-17 — firmware authorization shares one signing domain with user
    message signing.** The bootloader verifies firmware using
    `sha256(sha256("\x18Bitcoin Signed Message:\n" || len || M))`. The
    `signmessage` app computes the same value. A host that reaches a release-key
    holder's device can get a valid firmware signature by asking for an ordinary
    message signature.
-5. **High: F-21 — message signing shows less than it signs.** A NUL byte in the
+6. **High: F-21 — message signing shows less than it signs.** A NUL byte in the
    message truncates what the screen draws but not what is hashed. The
    `.decode("ascii")` guard also does not check ASCII at all, so invisible and
    right-to-left Unicode passes through. This is a second display/signing
    divergence, on the same prompt that F-17 turns into a firmware-release
    prompt.
-6. **High: F-22 — a swapped smartcard can skip the PIN screen.** The device
+7. **High: F-22 — a swapped smartcard can skip the PIN screen.** The device
    believes whatever PIN state the card reports. A card that answers "unlocked"
    means `Specter.unlock()` never asks for a PIN, so the anti-phishing words —
    the only card-swap check shown at boot — are never shown.
-7. **High: F-06 — flash-backed PIN protection allows cheap offline
+8. **High: F-06 — flash-backed PIN protection allows cheap offline
    verification.** After internal-flash readout, each PIN guess costs one
    HMAC-SHA256, and the resulting material unwraps the stored mnemonic.
-8. **High (Plausible): F-32 — an early boot exception leaves CDC and MSC
+9. **High (Plausible): F-32 — an early boot exception leaves CDC and MSC
    enabled.** MicroPython then exposes both flash partitions read-write before
    PIN entry. This directly enables F-06 and supplies F-15's persistent QSPI
    implant. Only the attacker's ability to induce the hardware fault is
    untested.
-9. **Medium: F-15 — production imports unsigned Python from writable QSPI.**
+10. **Medium: F-15 — production imports unsigned Python from writable QSPI.**
    `/qspi/config.py` executes before PIN entry without replacing signed
    firmware or changing the anti-phishing secret. Physical QSPI write is the
    standalone prerequisite. F-32 supplies a software-mediated writer.
-10. **Medium: F-34 — a malicious smartcard can trigger a native one-byte stack
+11. **Medium: F-34 — a malicious smartcard can trigger a native one-byte stack
     overflow before PIN entry.** The off-by-one write is confirmed in production
     connect and transmit paths. Exact stack-slot corruption and exploitability
     need target validation.
-11. **Medium: F-33 and F-25 — firmware protection is not persistent.** An
+12. **Medium: F-33 and F-25 — firmware protection is not persistent.** An
     unsigned SD image clears write protection before authentication and leaves it
     off after rejection. With flash write access, boot-time CRC32 records accept
     persistent replacement firmware.
-12. **Medium: F-19 — security-critical text scrolls while Confirm stays fixed.**
+13. **Medium: F-19 — security-critical text scrolls while Confirm stays fixed.**
     The fee and every per-output warning sit below an attacker-chosen number of
     outputs in a scrolling container. The Confirm button is a fixed child of the
     screen. The aggregated warning block is now drawn first and is exempt.
-13. **Medium: F-11 — Liquid input amounts and assets are displayed without
+14. **Medium: F-11 — Liquid input amounts and assets are displayed without
     checking their cleartext values and blinders against the confidential
     commitments.**
-14. **Medium: F-23 — Liquid asset names are supplied by the host.** Only
+15. **Medium: F-23 — Liquid asset names are supplied by the host.** Only
     mainnet L-BTC and USDt have built-in names, and those are defaults: a host
     label replaces them and survives reloads, and any other asset can take the
     name `LBTC`. Testnet and regtest have no built-in names. A host can get real
     L-BTC displayed under any name it likes.
-15. **Medium: F-35 — a displayed Liquid address does not identify one
+16. **Medium: F-35 — a displayed Liquid address does not identify one
     scriptPubKey.** The confidential-address encoder is not gated by script type
     and reduces the leading opcode modulo `0x50`, and every validity check in the
     Liquid `blech32` decoder is commented out. Reproduced: `5120…`, `0120…`,
     `a120…`, and `f120…` all render as one address string, and `6a14…`
     (OP_RETURN) renders as a well-formed `lq16…` address. The equivalent Bitcoin
     encoder is gated and holds.
-16. **Medium: F-24 — the transaction screen is incomplete by default.** There is
+17. **Medium: F-24 — the transaction screen is incomplete by default.** There is
     no fee sanity check of any kind — no absolute threshold, no rate, no
     percentage — so an extreme or negative fee renders as an ordinary line, and
     change outputs are dropped from the default page without any count of what
     was omitted.
-17. **Medium: F-18 — the native TRNG driver fails open.** `rng_get()` returns
+18. **Medium: F-18 — the native TRNG driver fails open.** `rng_get()` returns
     `0` after a 10 ms timeout and never inspects the seed-error or clock-error
     status bits, so a failed peripheral is indistinguishable from zero entropy
     at the C boundary. A Python-layer liveness check in `src/rng.py` catches a
     stalled peripheral but cannot see the status bits or detect bias.
-18. **Medium: F-30 — `SIGHASH_NONE` and `ANYONECANPAY` are accepted after a
+19. **Medium: F-30 — `SIGHASH_NONE` and `ANYONECANPAY` are accepted after a
     generic warning.** The resulting input signature can authorize a payment
     assembled after approval.
-19. **Medium: F-05 — arbitrary-path xpubs and the device fingerprint are exported
+20. **Medium: F-05 — arbitrary-path xpubs and the device fingerprint are exported
     over enabled USB without per-request confirmation.**
 
 ### 3.2 Defenses that hold
