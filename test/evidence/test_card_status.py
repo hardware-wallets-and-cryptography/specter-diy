@@ -40,7 +40,10 @@ class CardStatusEvidence(unittest.TestCase):
         applet = _untrusted_applet()
         keystore = object.__new__(MemoryCard)
         keystore.applet = applet
+        keystore._userkey = None
+        keystore._is_key_saved = False
         keystore.show_loader = lambda _message: None
+        keystore.check_saved = lambda: False
         prompted = []
 
         async def get_pin():
@@ -48,7 +51,6 @@ class CardStatusEvidence(unittest.TestCase):
             return "1234"
 
         keystore.get_pin = get_pin
-        keystore._unlock = applet.unlock
         asyncio.run(keystore.unlock())
 
         self.assertEqual(

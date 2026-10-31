@@ -38,6 +38,7 @@ class AssetIdentityEvidence(unittest.TestCase):
         self.manager.keystore = self.card
         self.manager.network = "liquidv1"
         self.manager.assets = {}
+        self.manager.reserved = {}
         self.mocks = (
             patch.object(liquid.platform, "maybe_mkdir"),
             patch.object(liquid.platform, "file_exists",

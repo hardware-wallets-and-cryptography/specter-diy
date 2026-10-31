@@ -14,6 +14,25 @@ import lvgl as lv
 SCREENS = Path(__file__).resolve().parents[2] / "src/gui/screens"
 
 
+class _Scrollable:
+    def __init__(self, page):
+        self.page = page
+        self.y = 0
+        self.callback = None
+
+    def get_y(self):
+        return self.y
+
+    def get_height(self):
+        return max(
+            [self.page.height]
+            + [c.get_y() + c.get_height() for c in self.page.children]
+        )
+
+    def set_event_cb(self, callback):
+        self.callback = callback
+
+
 class _Widget:
     LONG = SimpleNamespace(BREAK=1)
     ALIGN = SimpleNamespace(CENTER=1, LEFT=2)
@@ -31,6 +50,12 @@ class _Widget:
         self.disabled = False
         self.callback = None
         self.style = SimpleNamespace(text=SimpleNamespace(font=None, color=None))
+        self._scrl = None
+
+    def get_scrl(self):
+        if self._scrl is None:
+            self._scrl = _Scrollable(self)
+        return self._scrl
 
     def set_text(self, text):
         self.text = text
@@ -145,14 +170,23 @@ class ConfirmationUiEvidence(unittest.TestCase):
             patch.object(lv, "page", _Widget, create=True),
             patch.object(lv, "label", _Widget, create=True),
             patch.object(lv, "sw", _Widget, create=True),
-            patch.object(lv, "btn", SimpleNamespace(STATE=SimpleNamespace(INA=1)),
-                         create=True),
+            patch.object(lv, "btn", SimpleNamespace(
+                STATE=SimpleNamespace(REL=0, INA=1)
+            ), create=True),
             patch.object(lv, "ALIGN", SimpleNamespace(
                 OUT_BOTTOM_MID=1, OUT_BOTTOM_LEFT=2, IN_TOP_MID=3,
                 IN_TOP_LEFT=4, CENTER=5, IN_LEFT_MID=6,
             ), create=True),
             patch.object(lv, "ANIM", SimpleNamespace(OFF=0), create=True),
-            patch.object(lv, "EVENT", SimpleNamespace(RELEASED=1), create=True),
+            patch.object(lv, "EVENT", SimpleNamespace(
+                PRESSED=1, PRESSING=2, PRESS_LOST=3, RELEASED=4,
+                SHORT_CLICKED=5, CLICKED=6, LONG_PRESSED=7,
+                LONG_PRESSED_REPEAT=8, DRAG_BEGIN=9, DRAG_END=10,
+                DRAG_THROW_BEGIN=11,
+            ), create=True),
+            patch.object(lv, "event_send", lambda obj, event, data=None: (
+                obj.callback(obj, event) if getattr(obj, "callback", None) else None
+            ), create=True),
             patch.object(lv, "style_t", lambda: SimpleNamespace(
                 text=SimpleNamespace(font=None, color=None)), create=True),
             patch.object(lv, "style_copy", lambda dest, source: None, create=True),

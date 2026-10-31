@@ -5,8 +5,9 @@ from unittest import TestCase
 
 from embit import bip32, ec, script
 from embit.descriptor import Descriptor
-from embit.psbt import PSBT, DerivationPath
+from embit.psbt import PSBT, DerivationPath, PSBTError
 from embit.transaction import Transaction, TransactionInput, TransactionOutput
+from apps.wallets.wallet import WalletError
 from tests.util import clear_testdir, get_keystore, get_wallets_app
 
 
@@ -44,9 +45,13 @@ class SigningAuthorizationEvidence(TestCase):
             100000, script.p2wpkh(pub)
         )
 
-        _, meta = self.manager.preprocess_psbt(
-            BytesIO(psbt.serialize()), BytesIO()
-        )
+        try:
+            _, meta = self.manager.preprocess_psbt(
+                BytesIO(psbt.serialize()), BytesIO()
+            )
+        except (WalletError, PSBTError):
+            # Preferred F-03 fix (action-plan item 3): reject unverified inputs.
+            return
 
         self.assertEqual(meta["fee"], 10000)
         self.assertNotIn("warning", meta["inputs"][0])
@@ -96,22 +101,28 @@ class SigningAuthorizationEvidence(TestCase):
             self.keystore.fingerprint, attacker_path
         )
 
-        filled = BytesIO()
-        wallets, meta = self.manager.preprocess_psbt(
-            BytesIO(psbt.serialize()), filled
-        )
-        self.assertIn(None, wallets)
-        self.assertNotIn("warning", meta["inputs"][0])
         self.assertNotEqual(
             script.p2wsh(supplied_script.witness_script()),
             prevtx.vout[0].script_pubkey,
         )
 
-        filled.seek(0)
-        psbtv = self.manager.PSBTViewClass.view(filled, compress=True)
-        self.assertTrue(psbtv.input(0).verify())
-        signed = BytesIO()
-        self.manager.sign_psbtview(psbtv, signed, wallets, None)
+        filled = BytesIO()
+        try:
+            wallets, meta = self.manager.preprocess_psbt(
+                BytesIO(psbt.serialize()), filled
+            )
+            self.assertIn(None, wallets)
+            self.assertNotIn("warning", meta["inputs"][0])
+
+            filled.seek(0)
+            psbtv = self.manager.PSBTViewClass.view(filled, compress=True)
+            if not psbtv.input(0).verify():
+                return
+            signed = BytesIO()
+            self.manager.sign_psbtview(psbtv, signed, wallets, None)
+        except (WalletError, PSBTError):
+            return
+
         signed.seek(0)
         signed_psbt = PSBT.read_from(signed)
 

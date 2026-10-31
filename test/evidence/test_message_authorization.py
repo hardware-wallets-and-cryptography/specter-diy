@@ -19,14 +19,20 @@ FIRMWARE_MESSAGE = (
     b"b77.777.777rc77-77.777.777rc77-1tudm93ag6fu6y7x4q6s87ar6zskyc"
     b"pmceltrmt7s577aa94yzan9zeyvfd"
 )
+MAIN_ONLY_FIRMWARE_MESSAGE = (
+    b"77.777.777rc77-1tudm93ag6fu6y7x4q6s87ar6zskyc"
+    b"pmceltrmt7s577aa94yzan9zeyvfd"
+)
 
 
 class _RecordingPrompt:
+    last_title = None
     last_msg = None
 
     def __init__(self, title, msg):
         self.title = title
         self.msg = msg
+        _RecordingPrompt.last_title = title
         _RecordingPrompt.last_msg = msg
 
 
@@ -86,6 +92,7 @@ class MessageAuthorizationEvidence(unittest.TestCase):
         self.addCleanup(self.prompt_patch.stop)
         self.addCleanup(clear_testdir)
         self.addCleanup(gc.collect)
+        _RecordingPrompt.last_title = None
         _RecordingPrompt.last_msg = None
         self.signed = []
         self.app = signmessage.MessageApp("testdir/message")
@@ -101,22 +108,38 @@ class MessageAuthorizationEvidence(unittest.TestCase):
         return asyncio.run(self.app.process_host_command(BytesIO(command), _approve))
 
     def test_firmware_authorization_message_is_not_generically_signed(self):
-        try:
-            self._send(b"m/44h/0h/0h/0/0", FIRMWARE_MESSAGE)
-        except AppError:
-            pass
-        self.assertEqual(
-            self.signed,
-            [],
-            "F-17: the ordinary message app signed a bootloader-format "
-            "firmware authorization message",
-        )
+        for candidate in (FIRMWARE_MESSAGE, MAIN_ONLY_FIRMWARE_MESSAGE):
+            with self.subTest(message=candidate.decode()):
+                self.signed.clear()
+                _RecordingPrompt.last_title = None
+                _RecordingPrompt.last_msg = None
+                try:
+                    self._send(b"m/44h/0h/0h/0/0", candidate)
+                except AppError:
+                    continue
+                prompt_text = "%s\n%s" % (
+                    _RecordingPrompt.last_title or "",
+                    _RecordingPrompt.last_msg or "",
+                )
+                if "firmware" in prompt_text.lower():
+                    continue
+                self.assertEqual(
+                    self.signed,
+                    [],
+                    "F-17: the ordinary message app signed a bootloader-format "
+                    "firmware authorization message under a generic prompt",
+                )
 
     def test_printable_message_cannot_impersonate_trusted_frame(self):
         frame = b"_" * 34
         self._send(b"m/44h/0h/0h/0/0", b"Pay Alice\n" + frame + b"\nPay Mallory")
-        self.assertTrue(
-            _RecordingPrompt.last_msg.startswith("Hex message:"),
+        # Either the frame lines are moved out of the message label into
+        # separate widgets (F-21 action-plan item 2) or the message is
+        # escaped / shown as hex; in no case may the same string contain
+        # both the trusted frame delimiters and an unescaped attacker frame.
+        self.assertLess(
+            _RecordingPrompt.last_msg.count(frame.decode()),
+            2,
             "F-21: printable message text impersonated the prompt's own frame: %r"
             % _RecordingPrompt.last_msg,
         )
