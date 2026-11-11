@@ -19,10 +19,18 @@ The recommended way to set up your development environment is by using the Nix f
 - Ensure [flakes](https://wiki.nixos.org/wiki/Flakes) are enabled in your Nix config *(Note: The Determinate installer enables `nix-command` and `flakes` automatically. On Linux, ensure your user is in the `nix-users` group.)*
 
 ### Install direnv
-   ```sh
-   brew install direnv     # macOS
-   sudo apt install direnv # Linux
-   ```
+
+#### macOS
+
+```sh
+brew install direnv
+```
+
+#### Linux
+
+```sh
+sudo apt install direnv
+```
 
 ### Hook direnv into your shell
 - Follow the [instructions](https://direnv.net/docs/hook.html) for your shell of choice
@@ -31,7 +39,7 @@ The recommended way to set up your development environment is by using the Nix f
 
 Choose **one** of the following three methods. All three provide the exact same environment.
 
-### Option A: `direnv` (Recommended)
+### Option A: `direnv` (recommended)
 Automatically loads the shell when you enter the directory.
 ```sh
 direnv allow
@@ -45,7 +53,7 @@ nix develop
 ```
 *(Alternatively, you can prefix individual commands with `nix develop -c`).*
 
-### Option C: `nix-shell` (Fallback)
+### Option C: `nix-shell` (fallback)
 Use this if flakes are not enabled in your Nix config or if your tooling expects the classic interface.
 ```sh
 nix-shell
@@ -87,7 +95,11 @@ make unix
 Launch the simulator using either of the following commands:
 ```sh
 make simulate
-# OR
+```
+
+or
+
+```sh
 bin/micropython_unix simulate.py
 ```
 
