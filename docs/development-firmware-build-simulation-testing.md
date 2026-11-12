@@ -53,6 +53,10 @@ nix develop
 ```
 *(Alternatively, you can prefix individual commands with `nix develop -c`).*
 
+`nix develop` starts a subshell. To leave it, type `exit` or press `Ctrl+D`. You return to your original shell. If a command is still running inside it (e.g. `make unix`), press `Ctrl+C` first.
+
+*Note: With Option A (`direnv`) there is no subshell. To unload the environment, `cd` out of the project directory.*
+
 ### Option C: `nix-shell` (fallback)
 Use this if flakes are not enabled in your Nix config or if your tooling expects the classic interface.
 ```sh
