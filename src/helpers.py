@@ -182,34 +182,33 @@ def read_write(fin, fout, chunk_size=32):
 # However, embedded ports use epoch of 2000-01-01 00:00:00 UTC."
 # (Source: https://micropython.readthedocs.io/en/latest/library/utime.html)
 # Simulator MicroPython case:
-#   utime.mktime() does not exist. utime.localtime() gives result with both timezone offset and DST offset.
-#   To remove the timezone offset, we calculate the offset of EPOCH ZERO timestamp (1970-01-01 00:00:00 UTC),
-#   substract it from the timestamp, and recall utime.localtime() again.
-#   To remove the DST offset, we usually only need to check the dst_offset in the result (in hours), subtract it
-#   and call utime.localtime() again. However, in one case (DST start on March) when the local clocks jump forward,
-#   there is an hour when we don't need to apply the shift - and we correct it manually.
+#   The unix port has no utime.gmtime(), and utime.localtime() applies the host timezone and DST.
+#   Deriving the offset from localtime(0) breaks when the zone's offset changed since 1970
+#   (e.g. Europe/Kyiv was UTC+3 then, UTC+2 now). So we convert to UTC with pure integer
+#   arithmetic (Howard Hinnant's civil_from_days), independent of the host timezone.
 # Embedded MicroPython case:
 #   utime.gmtime() and utime.localtime() are the same function (in some implementation only utime.localtime()
 #   exists, but does not add timezone/dst offsets). However, timestamp zero is not 1970-01-01 00:00:00 UTC,
 #   but 2000-01-01 00:00:00 UTC. Therefore we reduce the fixed difference from the timestamp before execution.
 if platform.simulator:
+    _CUM_DAYS = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
     def conv_time(t):
-        y, m, d, hh, mm, ss, *_ = utime.localtime(0)
-        tz_offset = hh * 3600 + mm * 60 + ss
-        if (y, m) == (1970, 1):
-            tz_offset += 86400 * (d - 1)
-        elif (y, m) == (1969, 12):
-            tz_offset -= 86400 * (32 - d)
-        else:
-            raise ValueError("Failed to calculate simulator timezone offset")
-        adjusted_t = t - tz_offset
-        dst_offset = utime.localtime(adjusted_t)[8]
-        adjusted_t -= dst_offset * 3600
-        new_localtime = utime.localtime(adjusted_t)
-        if new_localtime[8] == 0 and dst_offset == 1 and new_localtime[3] == 1:
-            return (new_localtime[:3] + (2,) + new_localtime[4:])[:8]
-        return new_localtime[:8]
-    conv_time(0) # Check that the function is working
+        days, rem = divmod(t, 86400)
+        hh, rem = divmod(rem, 3600)
+        mm, ss = divmod(rem, 60)
+        wday = (days + 3) % 7  # 1970-01-01 was a Thursday, Monday == 0
+        z = days + 719468
+        era = z // 146097
+        doe = z - era * 146097
+        yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+        doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+        mp = (5 * doy + 2) // 153
+        d = doy - (153 * mp + 2) // 5 + 1
+        m = mp + 3 if mp < 10 else mp - 9
+        y = yoe + era * 400 + (1 if m <= 2 else 0)
+        leap = y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+        yday = _CUM_DAYS[m - 1] + d + (1 if leap and m > 2 else 0)
+        return (y, m, d, hh, mm, ss, wday, yday)
 else:
     _UNIX_EPOCH_OFFSET = 946684800
     _conv_time = utime.gmtime if hasattr(utime, "gmtime") else utime.localtime
