@@ -177,6 +177,10 @@ class ConfirmWalletScreen(Prompt):
         self.is_complex = is_complex
         self.keys = keys
         self.fill_message()
+        # Prompt.__init__ gated an empty page; gate again now that the key
+        # list is in place (F-19). The SLIP-132 switch only re-encodes the
+        # same keys, so fill_message() does not reset the latch.
+        self.gate_confirm(self.page)
 
     @property
     def use_slip132(self):
