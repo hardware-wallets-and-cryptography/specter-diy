@@ -38,6 +38,8 @@ class LWalletManager(WalletManager):
     prefixes = WalletManager.prefixes + [b"addasset", b"dumpassets"]
     PSBTViewClass = PSETView
     B64PSBT_PREFIX = b"cHNl"
+    # blinded(slip77(...),wsh(...)) and friends
+    DESCRIPTOR_STARTS = WalletManager.DESCRIPTOR_STARTS + [b"blinded("]
     WalletClass = LWallet
     # supported networks
     Networks = {k: v for k, v in NETWORKS.items() if v.get("blech32")}
@@ -276,6 +278,8 @@ class LWalletManager(WalletManager):
             "outputs": [{} for i in range(psbtv.num_outputs)],
             "issuance": False, "reissuance": False,
             "signed_inputs": signed_inputs,
+            "tx_version": psbtv.tx_version,
+            "locktime": psbtv.locktime,
         }
 
         fingerprint = self.keystore.fingerprint
@@ -336,7 +340,9 @@ class LWalletManager(WalletManager):
             gaps = None
             if wallet:
                 gaps = [g for g in wallet.gaps] # copy
-                res = wallet.get_derivation(inp.bip32_derivations)
+                res = wallet.get_derivation(
+                    inp.bip32_derivations, getattr(inp, "taproot_bip32_derivations", {})
+                )
                 if res:
                     idx, branch_idx = res
                     gaps[branch_idx] = max(gaps[branch_idx], idx+wallet.GAP_LIMIT+1)
@@ -377,6 +383,9 @@ class LWalletManager(WalletManager):
                 "label": wallet.name if wallet else "Unknown wallet",
                 "value": value,
                 "asset": self.asset_label(asset),
+                # PSET is PSBTv2-based and may omit the input sequence;
+                # it defaults to final, which is also what gets signed
+                "sequence": 0xFFFFFFFF if inp.sequence is None else inp.sequence,
             })
             if wallet and wallet.is_watchonly:
                 metainp["label"] += " (watch-only)"
@@ -540,30 +549,10 @@ class LWalletManager(WalletManager):
                 asset = None
                 value = -1
             metaout.update({
-                "change": (wallet is not None and len(wallets) == 1 and wallet in wallets),
                 "value": value,
-                "address": self.get_address(out),
                 "asset": self.asset_label(asset),
             })
-            if wallet:
-                metaout["label"] = wallet.name
-                res = wallet.get_derivation(out.bip32_derivations)
-                if res:
-                    idx, branch_idx = res
-                    branch_txt = ""
-                    if branch_idx == 1:
-                        "change "
-                    elif branch_idx > 1:
-                        "branch %d " % branch_idx
-                    metaout["label"] = "%s %s#%d" % (wallet.name, branch_txt, idx)
-                    if wallet in wallets:
-                        allowed_idx = wallets[wallet]["gaps"][branch_idx]
-                    else:
-                        allowed_idx = wallet.gaps[branch_idx]
-                    if allowed_idx <= idx:
-                        metaout["warning"] = "Derivation index is by %d larger than last known used index %d!" % (idx-allowed_idx+wallet.GAP_LIMIT, allowed_idx-wallet.GAP_LIMIT)
-                if wallet.is_watchonly:
-                    metaout["warning"] = "Watch-only wallet!"
+            self.fill_output_metadata(metaout, wallet, wallets, out)
             if asset and asset not in self.assets:
                 metaout.update({"raw_asset": asset})
             out.write_to(fout, skip_separator=True, version=psbtv.version)
@@ -571,6 +560,7 @@ class LWalletManager(WalletManager):
             # separator
             fout.write(b"\x00")
 
+        self.add_warnings(wallets, meta)
         return wallets, meta
 
 
