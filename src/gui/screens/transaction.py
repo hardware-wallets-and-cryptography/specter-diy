@@ -67,17 +67,31 @@ class TransactionScreen(Prompt):
         warning_text = None
         if "warnings" in meta and len(meta["warnings"]) > 0:
             warning_text = "WARNING!\n" + "\n".join(meta["warnings"])
-            self.warning = self.add_warning(self.page, warning_text)
-            obj = self.warning
+            # Not self.warning: Prompt keeps that name for the warning above
+            # the buttons, and this label sits inside the page.
+            obj = self.add_warning(self.page, warning_text)
 
+        hidden_change = 0
         for out in meta["outputs"]:
             # Verified change needs no confirmation - the device proved it
             # can't be an attacker-controlled destination. It stays visible
             # on the details page. A warning overrides this: it means the
             # output needs the user's attention.
             if out["change"] and not out.get("warnings"):
+                hidden_change += 1
                 continue
             obj = self.show_output(out, obj)
+
+        # Say that outputs were left out, so a hidden one is never a surprise (F-24).
+        if hidden_change:
+            lbl = add_label(
+                "%d verified change %s not shown"
+                % (hidden_change, "output" if hidden_change == 1 else "outputs"),
+                scr=self.page,
+            )
+            lbl.set_style(0, style_gray)
+            lbl.align(obj, lv.ALIGN.OUT_BOTTOM_MID, 0, 30)
+            obj = lbl
 
         fee = meta.get("fee")
         if fee:
@@ -120,19 +134,12 @@ class TransactionScreen(Prompt):
             # https://learnmeabitcoin.com/technical/transaction/input/sequence
             sequence = inp.get("sequence")
             if sequence is not None:
+                seq_text, is_relative_locktime = self.sequence_to_text(
+                    sequence, meta["tx_version"]
+                )
                 seqlbl = lv.label(self.page2)
-                is_relative_locktime = False
-                if sequence == 0xFFFFFFFF:
-                    seq_text = "Locktime disabled"
-                elif sequence == 0xFFFFFFFE:
-                    seq_text = 'RBF "disabled"'
-                elif sequence == 0xFFFFFFFD:
-                    seq_text = "RBF enabled"
-                elif meta["tx_version"] >= 2 and sequence <= 0xEFFFFFFF and (sequence | 0x0040FFFF == 0x0040FFFF):
-                    seq_text = "Relative Locktime"
-                    is_relative_locktime = True
-                else:
-                    seq_text = "Non-standard"
+                seqlbl.set_long_mode(lv.label.LONG.BREAK)
+                seqlbl.set_width(380)
                 seqlbl.set_text("Seq: 0x%08X (%s)" % (sequence, seq_text))
                 seqlbl.set_style(0, style_gray)
                 seqlbl.align(lbl, lv.ALIGN.OUT_BOTTOM_LEFT, 0, 5)
@@ -250,6 +257,12 @@ class TransactionScreen(Prompt):
 
         self.toggle_details()
 
+        # Prompt.__init__ gated an empty page. Gate again now that the pages
+        # are filled (F-19), on the page shown first. The details page lists
+        # everything the default page does, so it is the one to gate when it
+        # comes first.
+        self.gate_confirm(self.page2 if enable_inputs else self.page)
+
     def add_warning(self, page, text):
         warning = add_label(text, scr=page)
         warning.set_style(0, self.style_warning)
@@ -296,10 +309,31 @@ class TransactionScreen(Prompt):
             obj = warning
         return obj
 
+    def sequence_to_text(self, sequence, tx_version):
+        """Label for an input's sequence number: (text, is_relative_locktime).
+
+        BIP-125: any value below 0xFFFFFFFE signals RBF. BIP-68: in a
+        version 2+ transaction, a value with bit 31 clear is a relative
+        locktime. Only bits 0-15 (the value) and bit 22 (the unit) carry a
+        meaning; the other bits are ignored by consensus.
+        """
+        if sequence == 0xFFFFFFFF:
+            return "Locktime disabled", False
+        if sequence == 0xFFFFFFFE:
+            return 'RBF "disabled"', False
+        if tx_version >= 2 and not sequence & 0x80000000:
+            text = "RBF enabled, relative locktime"
+            if sequence & ~0x0040FFFF:
+                text += ", non-standard bits"
+            return text, True
+        return "RBF enabled", False
+
     def relative_locktime_to_text(self, sequence):
+        # BIP-68: the value is in the low 16 bits, bit 22 selects the unit
+        value = sequence & 0xFFFF
         if sequence & 0x00400000:
             # In units of 512 seconds
-            rlt_total = (sequence & 0xFFFF) * 512
+            rlt_total = value * 512
             rlt_parts = [
                 (amount, unit)
                 for amount, unit in [
@@ -310,6 +344,8 @@ class TransactionScreen(Prompt):
                 ]
                 if amount > 0
             ]
+            if not rlt_parts:
+                return "0 seconds"
             # Break into 2 lines if there are too many parts
             rlt_lines_parts = [rlt_parts] if len(rlt_parts) < 4 else [rlt_parts[:3], rlt_parts[3:]]
             return ",\n".join(
@@ -320,4 +356,4 @@ class TransactionScreen(Prompt):
                 for rlt_line_parts in rlt_lines_parts
             )
         else:
-            return "%d %s" % (sequence, "block" if sequence == 1 else "blocks")
+            return "%d %s" % (value, "block" if value == 1 else "blocks")
