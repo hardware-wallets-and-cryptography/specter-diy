@@ -54,14 +54,31 @@ class LWallet(Wallet):
         return True
 
     def fill_pset_scope(self, scope, desc, stream=None, rangeproof_offset=None, surj_proof_offset=None):
+        # An output is ours only if it is provably blinded to our blinding key.
+        # Otherwise the host could blind our change to its own key: we could
+        # not unblind the output, and so not spend it, without that key.
+        is_output = isinstance(scope, LOutputScope)
+        # The device blinds an output to its blinding pubkey from the PSET.
+        # This must run before the early return below: when the device
+        # blinds the output itself there is no rangeproof yet.
+        if is_output:
+            bkey = desc.blinding_key.get_blinding_key(scope.script_pubkey)
+            bpub = bkey.get_public_key() if bkey.is_private else bkey
+            if scope.blinding_pubkey != bpub.sec():
+                return False
         # if we don't have a rangeproof offset - nothing we can really do
         if rangeproof_offset is None:
             return True
+        # Only a private blinding key can rewind the host's rangeproof. With a
+        # watch-only blinding key we cannot tell whose key the proof is for.
+        if is_output and not bkey.is_private:
+            return False
         # pointer and length of preallocated memory for rangeproof rewind
         memptr, memlen = get_preallocated_ram()
-        # for inputs we check if rangeproof is there
-        # check if we actually need to rewind
-        if None not in [scope.asset, scope.value, scope.asset_blinding_factor, scope.value_blinding_factor]:
+        # For inputs, skip the rewind if the host supplied all values.
+        # Outputs are always rewound: the blinding pubkey field does not bind
+        # the host's nonce and rangeproof, which may be made for any key.
+        if not is_output and None not in [scope.asset, scope.value, scope.asset_blinding_factor, scope.value_blinding_factor]:
             # verify that asset and value blinding factors lead to value and asset commitments
             return True
         stream.seek(rangeproof_offset)
@@ -84,6 +101,10 @@ class LWallet(Wallet):
             raise RewindError(str(e))
         asset = msg[:32]
         abf = msg[32:64]
+        # These replace any values the host supplied. The rewind binds value
+        # and vbf to the commitment, but asset and abf come from the proof's
+        # message; the caller's verify() rejects ones that do not open the
+        # asset commitment.
         scope.value = value
         scope.value_blinding_factor = vbf
         scope.asset = asset

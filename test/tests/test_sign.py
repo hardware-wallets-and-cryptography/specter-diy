@@ -1,12 +1,28 @@
 from unittest import TestCase
-from .util import get_keystore, get_wallets_app, clear_testdir, check_sigs
+from .util import get_keystore, get_wallets_app, clear_testdir, check_sigs, TEST_DIR
+from embit import ec
+from embit.liquid.addresses import addr_decode, address as liquid_address, to_unconfidential
 from embit.liquid.networks import NETWORKS
 from embit.liquid.pset import PSET
 from embit.psbt import PSBT
 from embit.psbtview import PSBTView
 from embit.liquid.psetview import PSETView
 from apps.wallets.wallet import WalletError
+from apps.wallets.liquid.wallet import LWallet
 from io import BytesIO
+import platform
+
+# a blinding pubkey that is not the wallet's
+FOREIGN_BLINDING_PUBKEY = ec.PrivateKey(b"\x11" * 32).get_public_key().sec()
+
+
+def strip_output_blinding(out):
+    """Leave the output for the device to blind."""
+    out.asset_blinding_factor = None
+    out.value_blinding_factor = None
+    out.asset_commitment = None
+    out.value_commitment = None
+    out.range_proof = None
 
 PSBTS = {
     # type: (unsigned, signed)
@@ -185,3 +201,169 @@ class SignTest(TestCase):
         fout = BytesIO()
         with self.assertRaises(WalletError):
             wallets, meta = wapp.manager.preprocess_psbt(s, fout)
+
+    def _pset_meta(self, keep_blinding, mutate=None, setup=None):
+        """preprocess_psbt() metadata for the "wpkh" PSET.
+
+        keep_blinding=False strips the commitments so the device blinds the
+        outputs itself (no rangeproof to rewind). keep_blinding=True keeps the
+        host's blinding and unblinded values, with no device blinding seed.
+        setup(manager) runs before mutate(psbt), e.g. to replace the wallets.
+        """
+        clear_testdir()
+        mnemonic = "ceiling retire saddle forest engine address fancy option fruit destroy grid strategy"
+        ks = get_keystore(mnemonic=mnemonic, password="")
+        wapp = get_wallets_app(ks, 'elementsregtest')
+        if setup is not None:
+            setup(wapp.manager)
+        psbt = PSET.from_string(PSETS["wpkh"][0])
+        if keep_blinding:
+            psbt.unknown = {}
+        else:
+            for inp in psbt.inputs:
+                if inp.range_proof:
+                    inp.asset = None
+                    inp.value = None
+                    inp.asset_blinding_factor = None
+                    inp.value_blinding_factor = None
+            for out in psbt.outputs:
+                strip_output_blinding(out)
+        if mutate is not None:
+            mutate(psbt)
+        s = BytesIO(psbt.serialize())
+        del psbt
+        wallets, meta = wapp.manager.preprocess_psbt(s, BytesIO())
+        return meta
+
+    def _honest_change(self, keep_blinding):
+        """Index and address of the only change output, checked to be change."""
+        meta = self._pset_meta(keep_blinding)
+        change = [i for i, out in enumerate(meta["outputs"]) if out["change"]]
+        self.assertEqual(len(change), 1)
+        return change[0], meta["outputs"][change[0]]["address"]
+
+    def _assert_not_change(self, keep_blinding, idx, mutate, address=None):
+        meta = self._pset_meta(keep_blinding, mutate)
+        out = meta["outputs"][idx]
+        self.assertFalse(out["change"])
+        self.assertFalse("label" in out)
+        if address is not None:
+            self.assertEqual(out["address"], address)
+
+    def _check_foreign_blinding_pubkey_is_not_change(self, keep_blinding):
+        idx, address = self._honest_change(keep_blinding)
+        # shown with the confidential address for the foreign key
+        script, _ = addr_decode(address)
+        foreign_address = liquid_address(
+            script, ec.PublicKey.parse(FOREIGN_BLINDING_PUBKEY), NETWORKS["elementsregtest"]
+        )
+
+        def set_foreign_blinding_pubkey(psbt):
+            psbt.outputs[idx].blinding_pubkey = FOREIGN_BLINDING_PUBKEY
+
+        self._assert_not_change(keep_blinding, idx, set_foreign_blinding_pubkey, foreign_address)
+
+    def test_pset_change_blinded_by_device_to_foreign_key_is_not_change(self):
+        self._check_foreign_blinding_pubkey_is_not_change(keep_blinding=False)
+
+    def test_pset_host_blinded_change_with_foreign_blinding_pubkey_is_not_change(self):
+        # only the PSET field changes; the rangeproof is still the wallet's
+        self._check_foreign_blinding_pubkey_is_not_change(keep_blinding=True)
+
+    def test_pset_unconfidential_change_is_not_change(self):
+        # The device blinds only outputs with a blinding pubkey, so this
+        # change would be public.
+        idx, address = self._honest_change(keep_blinding=False)
+
+        def drop_blinding_pubkey(psbt):
+            psbt.outputs[idx].blinding_pubkey = None
+
+        self._assert_not_change(False, idx, drop_blinding_pubkey, to_unconfidential(address))
+
+    def test_pset_host_blinded_change_with_rangeproof_to_foreign_key_is_not_change(self):
+        # The host supplies the unblinded values and keeps the wallet's
+        # blinding pubkey in the PSET, but makes the nonce and the
+        # rangeproof for its own key.
+        idx, _ = self._honest_change(keep_blinding=True)
+
+        def reblind_to_foreign_key(psbt):
+            out = psbt.outputs[idx]
+            bpub = out.blinding_pubkey
+            out.reblind(b"\x22" * 32, blinding_pubkey=FOREIGN_BLINDING_PUBKEY)
+            self.assertEqual(out.blinding_pubkey, bpub)
+
+        self._assert_not_change(True, idx, reblind_to_foreign_key)
+
+    def test_pset_host_blinded_change_with_wrong_abf_in_rangeproof_is_rejected(self):
+        # The wallet can rewind the rangeproof, but its message carries an
+        # asset blinding factor that does not open the asset commitment:
+        # the wallet could not spend the output.
+        idx, _ = self._honest_change(keep_blinding=True)
+
+        # control: a new proof for the wallet's own key is still change
+        def reblind_to_own_key(psbt):
+            psbt.outputs[idx].reblind(b"\x22" * 32)
+
+        meta = self._pset_meta(True, reblind_to_own_key)
+        self.assertTrue(meta["outputs"][idx]["change"])
+
+        def put_wrong_abf_in_rangeproof(psbt):
+            out = psbt.outputs[idx]
+            abf = out.asset_blinding_factor
+            out.asset_blinding_factor = b"\x33" * 32
+            out.reblind(b"\x22" * 32)
+            out.asset_blinding_factor = abf
+
+        with self.assertRaises(WalletError):
+            self._pset_meta(True, put_wrong_abf_in_rangeproof)
+
+    def _public_blinding_change(self, device_blinds):
+        """Metadata of the change output when the only wallet is the "wpkh"
+        PSET's wallet with a public blinding key, and the change is honestly
+        blinded to that key."""
+        idx, _ = self._honest_change(keep_blinding=True)
+        wallets = []
+
+        def use_public_blinding_wallet(manager):
+            inner = manager.wallets[0].descriptor.to_string(blinded=False)
+            xpub = manager.keystore.get_xpub("m/84h/1h/1h")
+            bkey = xpub.to_base58(NETWORKS["elementsregtest"]["xpub"])
+            path = TEST_DIR + "/public_blinding"
+            platform.maybe_mkdir(path)
+            w = LWallet.parse("PublicBlinding&blinded(%s/{0,1}/*,%s)" % (bkey, inner), path)
+            w.save(manager.keystore)
+            manager.wallets = [w]
+            wallets.append(w)
+
+        def blind_change_to_wallet(psbt):
+            if device_blinds:
+                # restore the blinding seed and leave the outputs to the device
+                psbt.unknown = PSET.from_string(PSETS["wpkh"][0]).unknown
+                for out in psbt.outputs:
+                    strip_output_blinding(out)
+            w = wallets[0]
+            out = psbt.outputs[idx]
+            der_idx, branch_idx = w.get_derivation(out.bip32_derivations)
+            desc = w.descriptor.derive(der_idx, branch_index=branch_idx)
+            bkey = desc.blinding_key.get_blinding_key(out.script_pubkey)
+            self.assertFalse(bkey.is_private)
+            out.blinding_pubkey = bkey.sec()
+            if not device_blinds:
+                out.reblind(b"\x22" * 32)
+
+        meta = self._pset_meta(True, blind_change_to_wallet, use_public_blinding_wallet)
+        # the wallet spends, so its change could be change
+        self.assertEqual(meta["inputs"][0]["label"], "PublicBlinding")
+        return meta["outputs"][idx]
+
+    def test_pset_public_blinding_key_change_blinded_by_device_is_change(self):
+        # the device blinds the change to the blinding pubkey it checked
+        out = self._public_blinding_change(device_blinds=True)
+        self.assertTrue(out["change"])
+
+    def test_pset_public_blinding_key_change_blinded_by_host_is_not_change(self):
+        # Only a private blinding key can rewind the host's rangeproof, so the
+        # device cannot check whose key the proof is for.
+        out = self._public_blinding_change(device_blinds=False)
+        self.assertFalse(out["change"])
+        self.assertFalse("label" in out)
