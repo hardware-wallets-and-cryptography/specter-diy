@@ -10,9 +10,13 @@ class TCPSocket:
     def __init__(self, port=8787):
         self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.s.connect(("127.0.0.1", port))
+        # without a timeout recv() blocks forever if the simulator never answers
+        self.s.settimeout(0.5)
+        # bytes read by _wait_line beyond the line it returned
+        self._buf = b""
 
     def readline(self, eol=b"\r\n", timeout=3):
-        res = b""
+        res, self._buf = self._buf, b""
         t0 = time.time()
         while not (eol in res):
             # timeout
@@ -21,6 +25,8 @@ class TCPSocket:
             try:
                 raw = self.s.recv(1000)
                 res += raw
+            except socket.timeout:
+                continue
             except Exception as e:
                 print(e)
                 time.sleep(0.01)
@@ -35,8 +41,41 @@ class TCPSocket:
         self.s.send(data)
         return self.readline(eol=b"ACK\r\n")
 
-    def receive(self):
-        return self.readline()
+    def receive(self, timeout=60):
+        # Before the socket timeout existed, recv() blocked until data came,
+        # so slow host commands (e.g. PSBT signing) never timed out here.
+        # Keep a long default so they still complete.
+        return self.readline(timeout=timeout)
+
+    def drain(self, timeout=0.3):
+        """Discard anything already sent to us (e.g. old screen names)."""
+        self.readline(eol=b"\0never\0", timeout=timeout)
+        self._buf = b""
+
+    def _wait_line(self, match, timeout):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            while b"\r\n" in self._buf:
+                line, self._buf = self._buf.split(b"\r\n", 1)
+                if match(line):
+                    return line
+            try:
+                self._buf += self.s.recv(1000)
+            except socket.timeout:
+                pass
+        return None
+
+    def command(self, name, timeout=3):
+        """Simulator widget command on the GUI socket (see
+        TCPGUI.widget_command), e.g. "press_confirm" or "scroll_end".
+        Returns the reply line, or None on timeout."""
+        self.s.send(name.encode() + b"\r\n")
+        return self._wait_line(
+            lambda l: l.startswith(b"state ") or l.startswith(b"error:"), timeout)
+
+    def wait_screen(self, name, timeout=5):
+        """Wait until the GUI reports that screen `name` was opened."""
+        return self._wait_line(lambda l: l == name.encode(), timeout)
 
 class SimController:
     def __init__(self):
@@ -53,7 +92,9 @@ class SimController:
         self.proc = subprocess.Popen("../../bin/micropython_unix simulator.py",
                                 stdout=subprocess.PIPE,
                                 shell=True, preexec_fn=os.setsid)
-        time.sleep(1)
+        # GUI commands sent before the first screen exists are dropped, so
+        # give slow machines (e.g. macOS with SDL) time to bring it up.
+        time.sleep(float(os.environ.get("SIM_STARTUP_DELAY", "5")))
 
     def load(self):
         # command socket
@@ -77,7 +118,11 @@ class SimController:
                 time.sleep(0.3)
             except:
                 pass
-        os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)  # Send the signal to all the process groups
+        try:
+            # The simulator may exit after handling the quit command above.
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+        except ProcessLookupError:
+            pass
         time.sleep(1)
 
     def query(self, data, commands=[]):
