@@ -175,3 +175,31 @@ def read_write(fin, fout, chunk_size=32):
         total += fout.write(chunk)
     return total
 
+# The conv_time() function converts a timestamp measured in seconds from 1970-01-01 00:00:00 UTC to
+# human-readable parameters (year, month, day, hour, minute, second, weekday, yearday) in UTC.
+# It uses pure integer arithmetic (Howard Hinnant's civil_from_days) on every platform:
+# - The unix port has no utime.gmtime(), and utime.localtime() applies the host timezone and DST.
+# - The STM32 port's utime.localtime() uses a 2000-01-01 epoch and converts its argument to a
+#   signed machine word, so any nLockTime above 3,094,168,447 (2068-01-19) raised OverflowError
+#   and crashed the transaction screen. The input here comes from the host.
+# Python ints are arbitrary precision, so the full 32-bit nLockTime range is handled.
+_CUM_DAYS = (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)
+
+
+def conv_time(t):
+    days, rem = divmod(t, 86400)
+    hh, rem = divmod(rem, 3600)
+    mm, ss = divmod(rem, 60)
+    wday = (days + 3) % 7  # 1970-01-01 was a Thursday, Monday == 0
+    z = days + 719468
+    era = z // 146097
+    doe = z - era * 146097
+    yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
+    doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
+    mp = (5 * doy + 2) // 153
+    d = doy - (153 * mp + 2) // 5 + 1
+    m = mp + 3 if mp < 10 else mp - 9
+    y = yoe + era * 400 + (1 if m <= 2 else 0)
+    leap = y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
+    yday = _CUM_DAYS[m - 1] + d + (1 if leap and m > 2 else 0)
+    return (y, m, d, hh, mm, ss, wday, yday)
