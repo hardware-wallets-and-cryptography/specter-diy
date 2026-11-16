@@ -2,7 +2,6 @@
 
 All normal Bitcoin descriptors work. Aside from that we have a few extensions:
 
-
 ## Multiple branches in descriptors
 
 To save some space in the QR codes we allow adding descriptors with multiple branches in one go. If you want to use `wpkh(xpub/0/*)` for receiving addresses and `wpkh(xpub/1/*)` for change addresses you can combine them in a single descriptor: `wpkh(xpub/{0,1}/*)` - the wallet will treat first index of the `{}` set part as the branch for receiving addresses and the second one as change addresses.
@@ -16,6 +15,15 @@ wsh(sortedmulti(2,xpubA/{22,33,44}/*,xpubB/34/*/{1,8,6},pubkey3))
 Here for receiving address number 17 the wallet will use the script from `wsh(sortedmulti(2,xpubA/22/17,xpubB/34/17/1,pubkey3))`.
 
 The only requirement is that the number of indexes in all sets is the same (3 in the case above).
+
+Automatic change classification is deliberately narrower than descriptor
+parsing. The device treats only descriptors with exactly two branches as
+having the canonical receive/change shape. In a two-branch descriptor,
+branch-list position 0 is receive and position 1 is change. A raw child
+number is not the position: in `<22;33>`, raw value 33 is position 1 and is
+eligible for change classification. Descriptors with one, three, or more
+branches remain valid descriptors, but their outputs are never hidden as
+automatic change.
 
 ## Default derivations
 

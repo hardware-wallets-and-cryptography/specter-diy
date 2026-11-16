@@ -11,9 +11,10 @@ Main part of the device is the developer board:
 - Standard MicroUSB cable to communicate over USB
 
 Optional but recommended:
+
 - [Waveshare QR code scanner](https://www.waveshare.com/barcode-scanner-module.htm) with long pin headers like [these](https://eu.mouser.com/ProductDetail/Samtec/DW-02-10-T-S-571?qs=sGAEpiMZZMvlX3nhDDO4AE5PKXAQeC6NPk%2FcLBS9yKI%3D) or [these](https://www.amazon.com/gp/product/B015KA0RRU/) to connect the scanner to the board (4 pin headers needed).
 
-Check out the assembly video [on youtube](https://youtu.be/1H7FqG_FmCw)
+Check out the assembly video [on YouTube](https://youtu.be/1H7FqG_FmCw)
 
 We are currently working on [an extension board](../shield) that includes a smartcard slot, QR code scanner, battery and a 3d printed case, but it doesn't include the main part — discovery board that you need to order separately. This way supply chain attack is still not an issue as the security-critical components are bought from random electronic store.
 
@@ -37,7 +38,7 @@ No soldering required, but if you have soldering skills you can make the wallet 
 
 You can find some cheap scanners in China. Their quality is often not that great, but you can take a chance. Maybe even ESPcamera would do the job. You only need to connect power, UART (pins D0 and D1), and trigger to D5.
 
-**Option 4.** No scanner. 
+**Option 4.** No scanner.
 
 Then you can only use Specter with USB / SD Card.
 
