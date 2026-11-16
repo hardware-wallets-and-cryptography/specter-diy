@@ -29,8 +29,8 @@ class HostSettings(Prompt):
                 switch.on(lv.ANIM.OFF)
             self.switches.append(switch)
             y = lbl.get_y() + 80
-        else:
-            label = add_label(controls_empty_text, y, scr=self.page)
+        if not controls:
+            add_label(controls_empty_text, y, scr=self.page)
         self.confirm_button.set_event_cb(on_release(self.update))
         self.cancel_button.set_event_cb(on_release(lambda: self.set_value(None)))
 
