@@ -9,7 +9,7 @@ from .core import KeyStoreError, PinError
 from .ram import RAMKeyStore
 from platform import CriticalErrorWipeImmediately
 from binascii import hexlify, unhexlify
-from rng import get_random_bytes
+from rng import get_random_bytes, RNGError
 from embit import ec, bip39, bip32
 from helpers import tagged_hash
 from gui.screens import Alert, PinScreen, Menu, MnemonicScreen, InputScreen
@@ -110,7 +110,9 @@ class FlashKeyStore(RAMKeyStore):
         """
         Unlock the keystore, raises PinError if PIN is invalid.
         Raises CriticalErrorWipeImmediately if no attempts left.
+        Raises RNGError, without wiping, if the hardware TRNG has failed.
         """
+        attempts_left = self._pin_attempts_left
         # if anything goes wrong here - wipe
         try:
             # decrease the counter
@@ -120,8 +122,16 @@ class FlashKeyStore(RAMKeyStore):
             if self._pin_attempts_left <= 0:
                 self.wipe(self.path)
                 raise CriticalErrorWipeImmediately("No more PIN attempts!\nWipe!")
+        except RNGError:
+            # A dead TRNG is a hardware fault, not tampering: report it instead
+            # of wiping. Safe because save_aead() draws the IV before it opens
+            # the file, so the stored counter is unchanged, and the PIN is only
+            # checked below, so no guess was evaluated. Keep the in-memory
+            # counter in sync with flash.
+            self._pin_attempts_left = attempts_left
+            raise
         except Exception as e:
-            # convert any error to a critical error to wipe the device
+            # convert any other error to a critical error to wipe the device
             raise CriticalErrorWipeImmediately(str(e))
         # calculate hmac with entered PIN
         key = tagged_hash("pin", self.secret)
@@ -132,9 +142,17 @@ class FlashKeyStore(RAMKeyStore):
                 "Invalid PIN!\n%d of %d attempts left..."
                 % (self._pin_attempts_left, self._pin_attempts_max)
             )
+        # The PIN is correct. Reset the counter on flash before unlocking: if
+        # the save fails (e.g. RNGError from a dead TRNG), the keystore stays
+        # locked, so a restarted setup() asks for the PIN again, and the
+        # counter in memory still matches the decremented one on flash.
         self._pin_attempts_left = self._pin_attempts_max
+        try:
+            self.save_state()
+        except Exception:
+            self._pin_attempts_left = attempts_left - 1
+            raise
         self._is_locked = False
-        self.save_state()
         # derive PIN keys for reckless storage
         self.pin_secret = tagged_hash("pin", self.secret + pin.encode())
         self.load_enc_secret()
