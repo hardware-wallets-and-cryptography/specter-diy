@@ -1,0 +1,6 @@
+# The image only needs bootloader/tools/requirements.txt; the sources are bind
+# mounted at run time. Without this file the whole 1.4 GB working tree (.git and
+# the submodules included) is uploaded to the daemon on every build.
+*
+
+!bootloader/tools/requirements.txt
