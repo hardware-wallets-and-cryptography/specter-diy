@@ -43,6 +43,23 @@ SIGHASH_NAMES = {
 for sh in list(SIGHASH_NAMES):
     SIGHASH_NAMES[sh | SIGHASH.ANYONECANPAY] = SIGHASH_NAMES[sh] + " | ANYONECANPAY"
 
+INVALID_CHANGE_METADATA_WARNING = (
+    "Invalid change metadata! Host claimed this output as wallet change, "
+    "but it does not match your wallet. Verify the destination."
+)
+UNVERIFIED_CHANGE_WARNING = (
+    "This output goes to your wallet's change address (branch %d, #%d), "
+    "but the transaction contains unknown inputs. It is being treated as a "
+    "regular wallet output because it cannot be verified as change. "
+    "Review the destination."
+)
+TOO_MANY_DERIVATIONS_WARNING = (
+    "Too many derivation paths! Host metadata for this output claims more "
+    "paths than your wallet can have. Verify the destination."
+)
+UNVERIFIED_INPUT_WARNING = "Input amount is NOT verified - previous transaction missing!"
+UNVERIFIED_AMOUNTS_WARNING = "Input amounts are NOT verified - the real fee may be higher!"
+
 class WalletManager(BaseApp):
     """
     WalletManager class manages your wallets.
@@ -57,6 +74,8 @@ class WalletManager(BaseApp):
     # Class constants for inheritance
     PSBTViewClass = PSBTView
     B64PSBT_PREFIX = b"cHNi"
+    # top-level script functions a wallet descriptor can start with
+    DESCRIPTOR_STARTS = [b"sh(", b"wsh(", b"tr(", b"wpkh(", b"pkh("]
     # wallet class
     WalletClass = Wallet
     # supported networks
@@ -151,8 +170,17 @@ class WalletManager(BaseApp):
                 return ADD_WALLET, stream
             elif prefix == b"listwallets":
                 return LIST_WALLETS, stream
-            else:
-                return None, None
+            # The first word is not a wallet command. It can still be a
+            # wallet descriptor with spaces before the descriptor starts:
+            # "My wallet&wsh(...)" or "wsh(sortedmulti(2, ...". Check only
+            # for a descriptor here, and require its start to be complete:
+            # other apps' commands also begin with a word and a space, and
+            # one with "&" at the end of the read window must stay theirs.
+            stream.seek(0)
+            if self.looks_like_descriptor(stream.read(40), allow_cut_off=False):
+                stream.seek(0)
+                return ADD_WALLET, stream
+            return None, None
         # if not - we get data any without prefix
         # trying to detect type:
         # probably base64-encoded PSBT
@@ -174,8 +202,8 @@ class WalletManager(BaseApp):
                 return SIGN_PSBT, stream
             except:
                 pass
-        # probably wallet descriptor
-        if b"&" in data and b"?" not in data:
+        # probably wallet descriptor, raw or "<name>&<descriptor>"
+        if self.looks_like_descriptor(data):
             # rewind
             stream.seek(0)
             return ADD_WALLET, stream
@@ -188,6 +216,25 @@ class WalletManager(BaseApp):
             return VERIFY_ADDRESS, stream
 
         return None, None
+
+    def looks_like_descriptor(self, data, allow_cut_off=True):
+        """True if data (the first bytes of a request) starts with a wallet
+        descriptor, optionally preceded by "<name>&".
+
+        Matches the start of the descriptor, not a substring anywhere in the
+        data. With allow_cut_off, a cut-off start after "&" is accepted too,
+        because the read window can end right after the name.
+        """
+        if b"?" in data:
+            return False
+        sep = data.rfind(b"&")
+        body = data[sep + 1:].lstrip()
+        for start in self.DESCRIPTOR_STARTS:
+            if body.startswith(start):
+                return True
+            if allow_cut_off and sep >= 0 and start.startswith(body):
+                return True
+        return False
 
     async def process_host_command(self, stream, show_screen):
         platform.delete_recursively(self.tempdir)
@@ -326,7 +373,7 @@ class WalletManager(BaseApp):
         Returns dict with options to pass to sign_psbtview function.
         """
 
-        # ask the user if he wants to sign with custom sighashes
+        # ask the user if they want to sign with custom sighashes
         sighash = await self.confirm_sighashes(meta, show_screen)
         if sighash == False:
             return
@@ -382,6 +429,290 @@ class WalletManager(BaseApp):
         proceed = await show_screen(scr)
         return proceed
 
+    def add_output_warning(self, metaout, warning):
+        """Append an output warning without discarding an earlier warning."""
+        if not warning:
+            return
+        warnings = metaout.setdefault("warnings", [])
+        if warning not in warnings:
+            warnings.append(warning)
+
+    def _derive(self, wallet, idx, branch_idx, descriptor_cache):
+        """wallet.get_descriptor(idx, branch_idx), derived once per output.
+
+        Derivation is the expensive step of change verification (one EC
+        derivation per descriptor key), and get_output_status() looks at the
+        same (wallet, index, branch) several times.
+        """
+        cache_key = (wallet, idx, branch_idx)
+        desc = descriptor_cache.get(cache_key)
+        if desc is None:
+            desc, _ = wallet.get_descriptor(idx, branch_idx)
+            descriptor_cache[cache_key] = desc
+        return desc
+
+    def _iter_derivations(self, out):
+        """Yield ``(is_taproot, pubkey, derivation)`` for all output paths."""
+        for pubkey, derivation in getattr(out, "bip32_derivations", {}).items():
+            yield False, pubkey, derivation
+        for pubkey, (leafs, derivation) in getattr(
+            out, "taproot_bip32_derivations", {}
+        ).items():
+            yield True, pubkey, derivation
+
+    def _has_too_many_claims(self, wallet, out):
+        """True if the output claims more distinct (index, branch) pairs for
+        ``wallet`` than an honest output can have.
+
+        An honest output has at most one claim per descriptor key. One extra
+        claim is allowed so that a single conflicting claim is still reported
+        as invalid change metadata. Only paths are compared here, no keys are
+        derived, so a host can't make the device derive once per extra path.
+        """
+        limit = len(wallet.descriptor.keys) + 1
+        seen = []
+        for _, _, derivation in self._iter_derivations(out):
+            for key in wallet.descriptor.keys:
+                try:
+                    claim = key.check_derivation(derivation)
+                except Exception:
+                    continue
+                if claim is not None and claim not in seen:
+                    seen.append(claim)
+                    if len(seen) > limit:
+                        return True
+        return False
+
+    def _get_key_derivation_claims(
+        self, wallet, pubkey, derivation, is_taproot, descriptor_cache
+    ):
+        """Return ``(claim, descriptor)`` pairs matching a PSBT key and path."""
+        claims = []
+        for key_idx, key in enumerate(wallet.descriptor.keys):
+            try:
+                claim = key.check_derivation(derivation)
+                if claim is None:
+                    continue
+                idx, branch_idx = claim
+                desc = self._derive(wallet, idx, branch_idx, descriptor_cache)
+                derived_pubkey = desc.keys[key_idx].get_public_key()
+                if is_taproot:
+                    key_matches = derived_pubkey.xonly() == pubkey.xonly()
+                    # BIP 371 also permits the tweaked output key.
+                    if not key_matches and key is wallet.descriptor.key:
+                        key_matches = (
+                            desc.script_pubkey().data[2:] == pubkey.xonly()
+                        )
+                else:
+                    key_matches = derived_pubkey == pubkey
+                if not key_matches:
+                    continue
+                duplicate = False
+                for existing_claim, _ in claims:
+                    if existing_claim == claim:
+                        duplicate = True
+                        break
+                if not duplicate:
+                    claims.append((claim, desc))
+            except Exception:
+                continue
+        return claims
+
+    def get_wallet_derivation_claims(
+        self, wallet, out, output_wallet=None, descriptor_cache=None
+    ):
+        """Return derivation claims attributable to ``wallet`` for an output.
+
+        Pass the same ``descriptor_cache`` dict for every call about one output
+        so each (wallet, index, branch) is derived only once.
+        """
+        claims = []
+        if descriptor_cache is None:
+            descriptor_cache = {}
+        for is_taproot, pubkey, derivation in self._iter_derivations(out):
+            matching_claims = self._get_key_derivation_claims(
+                wallet, pubkey, derivation, is_taproot, descriptor_cache
+            )
+            try:
+                claim = wallet.descriptor.check_derivation(derivation)
+            except Exception:
+                claim = None
+            # Different descriptors can legitimately reuse the same key
+            # origins and derivation paths. If this metadata also derives
+            # the actual output under its known destination wallet, it is
+            # not an exclusive change claim from the spending wallet.
+            if (
+                claim is not None
+                and output_wallet is not None
+                and output_wallet is not wallet
+            ):
+                try:
+                    output_claims = self._get_key_derivation_claims(
+                        output_wallet, pubkey, derivation, is_taproot,
+                        descriptor_cache
+                    )
+                    if any(
+                        out.script_pubkey is not None
+                        and desc.script_pubkey() == out.script_pubkey
+                        for _, desc in output_claims
+                    ):
+                        matching_claims = []
+                        claim = None
+                except Exception:
+                    pass
+            if matching_claims:
+                output_matches = [
+                    matching_claim
+                    for matching_claim, desc in matching_claims
+                    if out.script_pubkey is not None
+                    and desc.script_pubkey() == out.script_pubkey
+                ]
+                entry_claims = output_matches or [
+                    matching_claim
+                    for matching_claim, desc in matching_claims
+                ]
+            else:
+                # Keep malformed path/pubkey metadata visible as suspicious.
+                entry_claims = [] if claim is None else [claim]
+            for entry_claim in entry_claims:
+                if entry_claim not in claims:
+                    claims.append(entry_claim)
+        return claims
+
+    def get_output_status(self, wallet, wallets, out):
+        """Return ``(derivation, is_change, warning)`` for one output.
+
+        Output ownership must not erase a descriptor-valid claim from the sole
+        known spending wallet. Claims from unrelated imported wallets and
+        ambiguous transactions are deliberately ignored.
+        """
+        spending_wallets = [w for w in wallets if w is not None]
+        # Only a two-branch descriptor gives branch-list position 1 the
+        # "change" meaning. For <0;1;2> and other unusual layouts we do
+        # not know what position 1 is, so a host derivation for it is not
+        # a change claim and must not raise INVALID_CHANGE_METADATA - same
+        # rule the is_change classification below uses.
+        candidate = None
+        if (
+            len(spending_wallets) == 1
+            and spending_wallets[0].descriptor.num_branches == 2
+        ):
+            candidate = spending_wallets[0]
+        # Bound the derivation work before doing any of it.
+        for w in (wallet, candidate):
+            if w is not None and self._has_too_many_claims(w, out):
+                return None, False, TOO_MANY_DERIVATIONS_WARNING
+        descriptor_cache = {}
+
+        derivation = None
+        if wallet is not None:
+            for claim in self.get_wallet_derivation_claims(
+                wallet, out, descriptor_cache=descriptor_cache
+            ):
+                try:
+                    desc = self._derive(wallet, claim[0], claim[1], descriptor_cache)
+                    if desc.script_pubkey() == out.script_pubkey:
+                        derivation = claim
+                        break
+                except Exception:
+                    continue
+            if derivation is None:
+                derivation = wallet.get_derivation(
+                    out.bip32_derivations,
+                    getattr(out, "taproot_bip32_derivations", {}),
+                )
+        warning = None
+        if candidate is not None:
+            branch1_claims = [
+                claim for claim in self.get_wallet_derivation_claims(
+                    candidate, out, output_wallet=wallet,
+                    descriptor_cache=descriptor_cache,
+                )
+                if claim[1] == 1
+            ]
+            for idx, branch_idx in branch1_claims:
+                try:
+                    desc = self._derive(candidate, idx, branch_idx, descriptor_cache)
+                except Exception:
+                    continue
+                if out.script_pubkey is not None and desc.script_pubkey() == out.script_pubkey:
+                    break
+            else:
+                if branch1_claims:
+                    warning = INVALID_CHANGE_METADATA_WARNING
+
+        is_change = False
+        if wallet is not None and derivation is not None:
+            idx, branch_idx = derivation
+            if (
+                len(wallets) == 1
+                and wallet in wallets
+                and wallet.descriptor.num_branches == 2
+                and branch_idx == 1
+            ):
+                try:
+                    desc = self._derive(wallet, idx, branch_idx, descriptor_cache)
+                    is_change = desc.script_pubkey() == out.script_pubkey
+                except Exception:
+                    is_change = False
+            if (
+                not is_change
+                and None in wallets
+                and wallet.descriptor.num_branches == 2
+                and branch_idx == 1
+            ):
+                try:
+                    desc = self._derive(wallet, idx, branch_idx, descriptor_cache)
+                    if warning is None and desc.script_pubkey() == out.script_pubkey:
+                        warning = UNVERIFIED_CHANGE_WARNING % (branch_idx, idx)
+                except Exception:
+                    pass
+        return derivation if wallet is not None else None, is_change, warning
+
+    def fill_output_metadata(self, metaout, wallet, wallets, out):
+        """Fill in the wallet-related output metadata shared by all networks.
+
+        Sets the change flag, address, label and warnings. The value and any
+        network-specific fields stay with the caller.
+        """
+        derivation, is_change, warning = self.get_output_status(wallet, wallets, out)
+        metaout.update({
+            "change": is_change,
+            "address": self.get_address(out),
+        })
+        if warning:
+            self.add_output_warning(metaout, warning)
+        if not wallet:
+            return
+        metaout["label"] = wallet.name
+        if derivation:
+            idx, branch_idx = derivation
+            if is_change:
+                metaout["label"] = "%s change #%d" % (wallet.name, idx)
+            else:
+                # Label by is_change, never by branch_idx alone, so an output
+                # the security logic did not accept as change can't still be
+                # captioned "change".
+                branch_txt = "" if branch_idx == 0 else "branch %d " % branch_idx
+                if wallet in wallets:
+                    # back to a wallet that spends in this transaction
+                    metaout["label"] = "This wallet (%s) %s#%d" % (wallet.name, branch_txt, idx)
+                else:
+                    # another imported wallet
+                    metaout["label"] = "%s %s#%d" % (wallet.name, branch_txt, idx)
+            if wallet in wallets:
+                allowed_idx = wallets[wallet]["gaps"][branch_idx]
+            else:
+                allowed_idx = wallet.gaps[branch_idx]
+            if allowed_idx <= idx:
+                self.add_output_warning(
+                    metaout,
+                    "Derivation index is by %d larger than last known used index %d!" %
+                    (idx-allowed_idx+wallet.GAP_LIMIT, allowed_idx-wallet.GAP_LIMIT),
+                )
+        if wallet.is_watchonly:
+            self.add_output_warning(metaout, "Watch-only wallet!")
+
     def get_sighash_info(self, sighash):
         if sighash not in SIGHASH_NAMES:
             raise WalletError("Unknown sighash type: %d!" % sighash)
@@ -403,7 +734,7 @@ class WalletManager(BaseApp):
         if not used_custom_sighashes:
             return None
 
-        # ask the user if he wants to sign in case of non-default sighashes
+        # ask the user if they want to sign in case of non-default sighashes
         custom_sighashes = [
                 ("Input %d: %s" % (i, inp.get("sighash", sighash_name)))
                 for (i, inp) in enumerate(meta["inputs"])
@@ -629,6 +960,8 @@ class WalletManager(BaseApp):
 
         # string representation of the Bitcoin for wallet processing
         fee = 0
+        # set if an unverified input amount can make the shown fee wrong
+        amounts_unverified = False
 
         # here we will store all wallets that we detect in inputs
         # {wallet: {"amount": amount, "gaps": [gaps]}}
@@ -638,6 +971,8 @@ class WalletManager(BaseApp):
             "outputs": [{} for i in range(psbtv.num_outputs)],
             "default_asset": "BTC" if self.network == "main" else "tBTC",
             "signed_inputs": signed_inputs,
+            "tx_version": psbtv.tx_version,
+            "locktime": psbtv.locktime,
         }
 
         fingerprint = self.keystore.fingerprint
@@ -651,7 +986,13 @@ class WalletManager(BaseApp):
             inp = psbtv.input(i)
             metainp = meta["inputs"][i]
             # verify, do not require non_witness_utxo if witness_utxo is set
-            inp.verify(ignore_missing=True)
+            if not inp.verify(ignore_missing=True) and not self.signature_commits_to_amounts(inp):
+                metainp["warning"] = UNVERIFIED_INPUT_WARNING
+                # A wrong amount on a single segwit input only makes our
+                # signature invalid. With more inputs (two signing sessions)
+                # or a legacy input the host can hide a higher fee.
+                if psbtv.num_inputs > 1 or not self.signature_commits_to_own_amount(inp):
+                    amounts_unverified = True
 
             # check sighash in the input
             if inp.sighash_type is not None and inp.sighash_type != self.DEFAULT_SIGHASH:
@@ -678,7 +1019,9 @@ class WalletManager(BaseApp):
                         break
             if wallet:
                 gaps = [g for g in wallet.gaps] # copy
-                res = wallet.get_derivation(inp.bip32_derivations)
+                res = wallet.get_derivation(
+                    inp.bip32_derivations, getattr(inp, "taproot_bip32_derivations", {})
+                )
                 if res:
                     idx, branch_idx = res
                     gaps[branch_idx] = max(gaps[branch_idx], idx+wallet.GAP_LIMIT+1)
@@ -696,6 +1039,9 @@ class WalletManager(BaseApp):
             metainp.update({
                 "label": wallet.name if wallet else "Unknown wallet",
                 "value": value,
+                # PSBTv2 may omit PSBT_IN_SEQUENCE; BIP-370 defaults it to final,
+                # which is also what gets signed
+                "sequence": 0xFFFFFFFF if inp.sequence is None else inp.sequence,
             })
             if wallet and wallet.is_watchonly:
                 metainp["label"] += " (watch-only)"
@@ -734,34 +1080,65 @@ class WalletManager(BaseApp):
             # Get values and store in metadata and wallets dict
             value = out.value
             fee -= value
-            metaout.update({
-                "change": (wallet is not None and len(wallets) == 1 and wallet in wallets),
-                "value": value,
-                "address": self.get_address(out),
-            })
-            if wallet:
-                metaout["label"] = wallet.name
-                res = wallet.get_derivation(out.bip32_derivations)
-                if res:
-                    idx, branch_idx = res
-                    branch_txt = ""
-                    if branch_idx == 1:
-                        "change "
-                    elif branch_idx > 1:
-                        "branch %d " % branch_idx
-                    metaout["label"] = "%s %s#%d" % (wallet.name, branch_txt, idx)
-                    if wallet in wallets:
-                        allowed_idx = wallets[wallet]["gaps"][branch_idx]
-                    else:
-                        allowed_idx = wallet.gaps[branch_idx]
-                    if allowed_idx <= idx:
-                        metaout["warning"] = "Derivation index is by %d larger than last known used index %d!" % (idx-allowed_idx+wallet.GAP_LIMIT, allowed_idx-wallet.GAP_LIMIT)
-                if wallet.is_watchonly:
-                    metaout["warning"] = "Watch-only wallet!"
+            metaout["value"] = value
+            self.fill_output_metadata(metaout, wallet, wallets, out)
 
             out.write_to(fout, version=psbtv.version)
         meta["fee"] = fee
+        if amounts_unverified:
+            meta.setdefault("warnings", []).append(UNVERIFIED_AMOUNTS_WARNING)
+        self.add_warnings(wallets, meta)
         return wallets, meta
+
+    def signature_commits_to_amounts(self, inp):
+        """True if our signature for this input commits to the amounts of all
+        inputs, so a host lying about an amount only gets an invalid signature.
+
+        Taproot (BIP-341) signatures do, unless the sighash has ANYONECANPAY.
+        Segwit v0 signatures commit only to the input's own amount, and
+        legacy signatures to no amount at all, so for those the previous
+        transaction is needed to verify the amount and the fee.
+        """
+        try:
+            if inp.utxo.script_pubkey.script_type() != "p2tr":
+                return False
+        except Exception:
+            return False
+        return inp.sighash_type is None or not (inp.sighash_type & SIGHASH.ANYONECANPAY)
+
+    def signature_commits_to_own_amount(self, inp):
+        """True for segwit inputs (BIP-143 / BIP-341): the signature commits
+        to the input's own amount. Legacy signatures commit to no amount."""
+        try:
+            script_type = inp.utxo.script_pubkey.script_type()
+            if script_type in ("p2wpkh", "p2wsh", "p2tr"):
+                return True
+            if script_type == "p2sh" and inp.redeem_script is not None:
+                return inp.redeem_script.script_type() in ("p2wpkh", "p2wsh")
+        except Exception:
+            pass
+        return False
+
+    def add_warnings(self, wallets, meta):
+        """
+        Populates meta["warnings"] for the transaction confirmation screen.
+        Warns if the transaction spends inputs from multiple different
+        wallets, or if multiple unknown inputs cannot be grouped by wallet
+        (multisig change-address attack mitigation).
+        Appends to existing warnings instead of replacing them.
+        """
+        warning = None
+        if len(wallets) > 1:
+            warning = "Mixed inputs from different wallets!"
+        elif None in wallets and len(meta.get("inputs", [])) > 1:
+            # With only the None wallet bucket, every input is unknown. We
+            # cannot prove that those inputs share the same wallet policy.
+            warning = "Multiple unknown inputs may be from different wallets!"
+
+        if warning:
+            warnings = meta.setdefault("warnings", [])
+            if warning not in warnings:
+                warnings.append(warning)
 
     def sign_psbtview(self, psbtv, out_stream, wallets, sighash):
         for w in wallets:
