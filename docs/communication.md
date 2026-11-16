@@ -10,7 +10,7 @@ To verify receiving address hardware wallet expects the following string:
 bitcoin:<address>?index=<index>
 ```
 
-Prefix `bitcoin:` is optional. Index should be the last index of the derivation path for one of existing wallet descriptors. 
+Prefix `bitcoin:` is optional. Index should be the last index of the derivation path for one of existing wallet descriptors.
 
 Specter tries to derive an address for descriptors of all existing wallets and displays the address on the screen if one of derived addresses matches.
 
@@ -23,7 +23,7 @@ and it scanned QR code with data `bitcoin:bcrt1qd3mtrhysk3k4w6fmu7ayjvwk6q98c2dp
 
 it will try to derive receiving addresses for both wallets appending `/0/2` to every descriptor key. In this case for Multisig wallet the address will match, therefore it will display to the user this address with a title `Address #2 from wallet "Multisig"`.
 
-*Note that wallets are defined for particular network, so if you have a multisig wallet on regtest doesn't mean that it exists on testnet as well, and Specter only checks wallets in currently selected network.*
+_Note that wallets are defined for particular network, so if you have a multisig wallet on regtest doesn't mean that it exists on testnet as well, and Specter only checks wallets in currently selected network._
 
 ### Adding wallet to Specter
 

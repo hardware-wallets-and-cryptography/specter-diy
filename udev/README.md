@@ -3,7 +3,7 @@
 This directory contains udev rules for micropython & Specter DIY.
 These are necessary for the devices to be reachable on linux environments.
 
- - `49-micropython.rules` (Specter-DIY): http://wiki.micropython.org/Installation#USB-Permissioning-on-Linux
+- `49-micropython.rules` (Specter-DIY): http://wiki.micropython.org/Installation#USB-Permissioning-on-Linux
 
 Specter is connected as a virtual serial port, so you need to add yourself to `dialout` group.
 
