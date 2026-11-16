@@ -1,12 +1,29 @@
 from keystore.ram import RAMKeyStore
 from app import BaseApp
 from apps.wallets import App as WalletsApp
+from embit.script import Script
+from embit.transaction import Transaction, TransactionInput, TransactionOutput
 import platform
 
 TEST_DIR = "testdir"
 
 def check_sigs(psbt1, psbt2):
     return [inp.partial_sigs for inp in psbt1.inputs] == [inp.partial_sigs for inp in psbt2.inputs]
+
+def add_previous_txs(psbt):
+    """Gives every input that has only a witness_utxo a made-up previous
+    transaction and points the input at it. This changes the txids, so
+    signatures made before the call become invalid."""
+    for inp in psbt.inputs:
+        if inp.non_witness_utxo is not None or inp.witness_utxo is None:
+            continue
+        # spend the original outpoint, so every previous tx is unique
+        vout = [TransactionOutput(0, Script(b"\x6a")) for _ in range(inp.vout)]
+        vout.append(inp.witness_utxo)
+        prev = Transaction(vin=[TransactionInput(inp.txid, inp.vout)], vout=vout)
+        inp.non_witness_utxo = prev
+        inp.txid = prev.txid()
+    return psbt
 
 def clear_testdir():
     try:
