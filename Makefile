@@ -83,7 +83,7 @@ simulate: unix
 	$(TARGET_DIR)/micropython_unix simulate.py
 
 test: unix
-	$(TARGET_DIR)/micropython_unix tests/run_tests.py
+	cd test && ../$(TARGET_DIR)/micropython_unix run_tests.py
 
 all: mpy-cross disco unix
 
