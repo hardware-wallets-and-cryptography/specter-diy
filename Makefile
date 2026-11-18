@@ -4,6 +4,16 @@ FLAVOR ?= SPECTER
 USER_C_MODULES ?= ../../../usermods
 MPY_DIR ?= f469-disco/micropython
 EMBIT_INIT ?= f469-disco/libs/common/embit/src/embit/__init__.py
+ifeq ($(shell uname),Linux)
+    MPY_CFLAGS ?= -Wno-dangling-pointer -Wno-enum-int-mismatch
+    # old MicroPython NLR/GC segfaults with modern gcc hardening defaults (host build only)
+    MPY_UNIX_CFLAGS ?= $(MPY_CFLAGS) -fno-stack-protector -fcf-protection=none -fno-pie -fno-strict-aliasing
+    MPY_UNIX_LDFLAGS ?= -no-pie
+else
+    MPY_CFLAGS ?=
+    MPY_UNIX_CFLAGS ?= $(MPY_CFLAGS)
+    MPY_UNIX_LDFLAGS ?=
+endif
 FROZEN_MANIFEST_DISCO ?= ../../../../manifests/disco.py
 FROZEN_MANIFEST_DEBUG ?= ../../../../manifests/debug.py
 FROZEN_MANIFEST_UNIX ?= ../../../../manifests/unix.py
@@ -24,7 +34,8 @@ $(EMBIT_INIT): | $(MPY_DIR)/mpy-cross/Makefile
 mpy-cross: $(TARGET_DIR) $(MPY_DIR)/mpy-cross/Makefile $(EMBIT_INIT)
 	@echo Building cross-compiler
 	make -C $(MPY_DIR)/mpy-cross \
-	DEBUG=$(DEBUG) && \
+		DEBUG=$(DEBUG) \
+		CFLAGS_EXTRA="$(MPY_CFLAGS)" && \
 	cp $(MPY_DIR)/mpy-cross/mpy-cross $(TARGET_DIR)
 
 # disco board with bitcoin library
@@ -36,14 +47,15 @@ disco: $(TARGET_DIR) mpy-cross $(MPY_DIR)/ports/stm32
 		USE_DBOOT=$(USE_DBOOT) \
 		USER_C_MODULES=$(USER_C_MODULES) \
 		FROZEN_MANIFEST=$(FROZEN_MANIFEST_DISCO) \
-		DEBUG=$(DEBUG) && \
+		DEBUG=$(DEBUG) \
+		CFLAGS_EXTRA="$(MPY_CFLAGS)" && \
 	arm-none-eabi-objcopy -O binary \
 		$(MPY_DIR)/ports/stm32/build-STM32F469DISC/firmware.elf \
 		$(TARGET_DIR)/specter-diy.bin && \
 	cp $(MPY_DIR)/ports/stm32/build-STM32F469DISC/firmware.hex \
 		$(TARGET_DIR)/specter-diy.hex
 
-# disco board with bitcoin library
+# disco board with bitcoin library (debug)
 debug: $(TARGET_DIR) mpy-cross $(MPY_DIR)/ports/stm32
 	@echo Building firmware
 	make -C $(MPY_DIR)/ports/stm32 \
@@ -52,20 +64,22 @@ debug: $(TARGET_DIR) mpy-cross $(MPY_DIR)/ports/stm32
 		USE_DBOOT=$(USE_DBOOT) \
 		USER_C_MODULES=$(USER_C_MODULES) \
 		FROZEN_MANIFEST=$(FROZEN_MANIFEST_DEBUG) \
-		DEBUG=$(DEBUG) && \
+		DEBUG=$(DEBUG) \
+		CFLAGS_EXTRA="$(MPY_CFLAGS)" && \
 	arm-none-eabi-objcopy -O binary \
 		$(MPY_DIR)/ports/stm32/build-STM32F469DISC/firmware.elf \
 		$(TARGET_DIR)/debug.bin && \
 	cp $(MPY_DIR)/ports/stm32/build-STM32F469DISC/firmware.hex \
 		$(TARGET_DIR)/debug.hex
 
-
 # unixport (simulator)
 unix: $(TARGET_DIR) mpy-cross $(MPY_DIR)/ports/unix
 	@echo Building binary with frozen files
 	make -C $(MPY_DIR)/ports/unix \
 		USER_C_MODULES=$(USER_C_MODULES) \
-		FROZEN_MANIFEST=$(FROZEN_MANIFEST_UNIX) && \
+		FROZEN_MANIFEST=$(FROZEN_MANIFEST_UNIX) \
+		CFLAGS_EXTRA="$(MPY_UNIX_CFLAGS)" \
+		LDFLAGS_EXTRA="$(MPY_UNIX_LDFLAGS)" && \
 	cp $(MPY_DIR)/ports/unix/micropython $(TARGET_DIR)/micropython_unix
 
 simulate: unix
