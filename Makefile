@@ -89,7 +89,7 @@ frozen-import-smoke: unix
 	cd /tmp && $(abspath $(TARGET_DIR)/micropython_unix) -c 'import asyncio; import asyncio.core; import microur.encoder; import microur.decoder; import microur.util.bytewords; import embit.bip39; import embit.bip85; import embit.compact; import embit.ec; import embit.hashes; import embit.networks; import embit.psbt; import embit.psbtview; import embit.script; import embit.transaction; import embit.descriptor; import embit.descriptor.arguments; import embit.descriptor.checksum; import embit.liquid; import embit.liquid.addresses; import embit.liquid.descriptor; import embit.liquid.networks; import embit.liquid.pset; import embit.liquid.psetview; import embit.liquid.slip77; import embit.liquid.transaction'
 
 test: unix frozen-import-smoke
-	$(TARGET_DIR)/micropython_unix tests/run_tests.py
+	cd test && ../$(TARGET_DIR)/micropython_unix run_tests.py
 
 all: mpy-cross disco unix
 
