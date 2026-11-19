@@ -1,0 +1,55 @@
+Questions
+
+Review commit ____.
+
+1. Does it add strond hardening / robustness to the project?
+
+2. Are there real bugs or issues in this commit: correctness, security, crashes, regressions, MicroPython incompatibilities?
+
+3. Are there any gaps that could be fixed in code?
+
+4. Are tests focus on correct code areas? In other words – do they test what is needed/intended?
+
+5. Does the commit message accurately and completely describe its diff? Flag claims that are wrong, overstated, or missing.
+
+----
+
+Hard constraint: no Markdown docs
+
+Do not read any `*.md` file in the project (docs/, udev/, shield/, shield-lite/, README.md, submodules, anywhere), and do not let any subagent read them. Reading Markdown through git (`git show <rev>:<file>.md`, `git cat-file`) counts too. Docs content was reviewed in an earlier iteration and is out of scope.
+
+Do not read or parse any images.
+
+- For the docs commit ("docs: restructure documentation, drop mkdocs config"), check its message only against `git show --stat --summary` (file list, renames, deletions, symlinks). Do not open file contents.
+
+- When diffing, exclude Markdown: `git show <c> -- . ':!*.md'`.
+
+Context
+
+- Device: MicroPython 1.x on a 32-bit MCU. Small ints are 31-bit; larger ints are mpz; `mp_obj_get_int` raises OverflowError above 2^31-1. Floats are single precision. The simulator is the MicroPython 1.12 unix port (`platform.simulator` is True there).
+
+- embit lives in `f469-disco/libs/common/embit/src/embit`. At the base it was an inline copy identical to embit v0.8.0; it is now a submodule at v0.8.2 plus 4 fork commits.
+
+- Firmware version encoding is in `bootloader/tools/core/blsection.py` (`version_to_str`); the bootloader forbids firmware downgrades.
+
+- Host dispatch: `src/specter.py` `process_host_request` calls every app's `can_process()`. If more than one app matches, it raises "Not sure what app to use...".
+
+- Submodule bumps (bootloader, f469-disco): review via `git -C <submodule> log --oneline <old>..<new>`. Read submodule code only to verify an API assumption.
+
+- Tests (run only inside nix dev shell):
+  - `cd test && python3 run_native_tests.py` (CPython with stubs): expect 104 run, 1 expected failure, which is the offline PIN-guess cost test, a known weakness the test tracks.
+  - `make test`: frozen-import smoke, then 21 MicroPython tests; all pass. The toolchain is available in this checkout (`bin/micropython_unix`, nix), so run it; say so if you couldn't. It re-freezes `src` into `bin/micropython_unix` (gitignored); that is allowed.
+
+- Read-only review: do not modify tracked files, commit, rebase, or push.
+
+- Shell: Bash
+
+Output
+
+1. A table: hash, subject, sound (yes/no), message accurate (yes/no).
+
+2. What you verified and what you did not (tests run, toolchain missing, etc.). Skip style nits.
+
+3. If the change and commit message are sound – suggest an expanded commit message version for a total Bitcoin and crypto wallets newbie. It should explain the why and how behind this change in the original commit you have reviewed.
+
+4. If the change and commit message are unsound – just mark it in the table.
