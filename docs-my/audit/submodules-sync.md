@@ -11,11 +11,10 @@ fatal: Unable to find refs/remotes/origin/dev revision in submodule path 'bootlo
 ### Why it happens
 
 [.gitmodules](../../.gitmodules) points the submodules at our forks, each on its
-configured branch (usually `dev`, but some use another, e.g. `secp-zkp--int` or
-`f469-disco--pin` in `f469-disco/.gitmodules`).
-However, a submodule that was cloned earlier keeps the old `origin` URL in its own
-git config (e.g. upstream `bitcoin-core/secp256k1`), which has no such branch.
-Changing `.gitmodules` alone does not update that remote.
+configured branch (usually `dev`, but some use another). However, a submodule that
+was cloned earlier keeps the old `origin` URL in its own git config (e.g. upstream
+`bitcoin-core/secp256k1`), which has no such branch. Changing `.gitmodules` alone
+does not update that remote.
 
 Nested submodules (e.g. `bootloader/lib/secp256k1`, `f469-disco/usermods/secp256k1`)
 are configured in the `.gitmodules` of their parent submodule, so every command
