@@ -108,7 +108,7 @@ class InputScreen(Screen):
 
     def __init__(
             self,
-            title="Enter your bip-39 password:",
+            title="Enter your BIP-39 passphrase:",
             note="It is never stored on the device",
             suggestion="",
             min_length=0,
