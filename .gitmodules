@@ -1,7 +1,7 @@
 [submodule "f469-disco"]
 	path = f469-disco
 	url = https://github.com/hardware-wallets-and-cryptography/f469-disco.git
-	branch = master
+	branch = dev--pre-release
 
 [submodule "bootloader"]
 	path = bootloader
